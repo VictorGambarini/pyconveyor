@@ -233,7 +233,71 @@ class TestOnStepEndHook:
         assert isinstance(values[0], Greeting)
 
 
-# ── RunContext step proxy ─────────────────────────────────────────────────────
+# ── Parallel step failure handling ───────────────────────────────────────────
+
+class TestParallelStepFailures:
+    def test_required_child_failure_raises(self, tmp_path: Path):
+        """If a required child fails, the parallel step raises RuntimeError."""
+        (tmp_path / "bad.j2").write_text("{{ undefined_var }}")
+        pipeline = tmp_path / "par_fail.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  m:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            "      - '{\"message\": \"hi\", \"language\": \"en\"}'\n"
+            "steps:\n"
+            "  - name: par\n"
+            "    type: parallel\n"
+            "    steps:\n"
+            "      - name: child_ok\n"
+            "        type: llm\n"
+            "        model: m\n"
+            "        prompt: bad.j2\n"
+            "        schema: tests.fixtures.schemas:Greeting\n"
+            "        max_attempts: 1\n"
+            "        required: true\n"
+        )
+        rctx = PipelineRunner(pipeline).run({})
+        assert rctx.failed
+
+    def test_optional_child_failure_continues(self, tmp_path: Path):
+        """If an optional child (required=false) fails, the result is None."""
+        (tmp_path / "bad.j2").write_text("{{ undefined_var }}")
+        (tmp_path / "good.j2").write_text("Hello!")
+        pipeline = tmp_path / "par_opt.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  m:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            "      - '{\"message\": \"hi\", \"language\": \"en\"}'\n"
+            "steps:\n"
+            "  - name: par\n"
+            "    type: parallel\n"
+            "    on_error: continue\n"
+            "    steps:\n"
+            "      - name: child_fail\n"
+            "        type: llm\n"
+            "        model: m\n"
+            "        prompt: bad.j2\n"
+            "        max_attempts: 1\n"
+            "        required: false\n"
+            "      - name: child_ok\n"
+            "        type: llm\n"
+            "        model: m\n"
+            "        prompt: good.j2\n"
+            "        max_attempts: 1\n"
+            "        required: true\n"
+        )
+        rctx = PipelineRunner(pipeline).run({})
+        # Optional child failed → result is None; required child succeeded
+        par_result = rctx.steps["par"].value
+        assert par_result is not None
+        assert par_result.get("child_fail") is None
+
 
 class TestRunContextProxy:
     def test_step_dict_access(self):
