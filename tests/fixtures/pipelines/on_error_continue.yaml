@@ -1,0 +1,23 @@
+# Pipeline with on_error: continue — step failure doesn't abort.
+
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - "not json"
+
+steps:
+  - name: optional
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    max_attempts: 1
+    on_error: continue
+
+  - name: fallback
+    type: transform
+    fn: tests.fixtures.steps:identity
+    inputs:
+      value: "fallback_value"

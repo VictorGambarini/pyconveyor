@@ -1,0 +1,23 @@
+# Pipeline with skip_remaining behaviour.
+
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - "invalid json"
+
+steps:
+  - name: fail_step
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    max_attempts: 1
+    on_error: skip_remaining
+
+  - name: should_be_skipped
+    type: transform
+    fn: tests.fixtures.steps:identity
+    inputs:
+      value: "should not run"

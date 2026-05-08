@@ -1,0 +1,26 @@
+# Pipeline with a condition step.
+
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "Bonjour!", "language": "French"}'
+
+steps:
+  - name: maybe_greet
+    type: condition
+    if: "ctx.should_greet"
+    then:
+      - name: greet
+        type: llm
+        model: default
+        prompt: greet.j2
+        schema: tests.fixtures.schemas:Greeting
+        max_attempts: 1
+    else:
+      - name: skip_msg
+        type: transform
+        fn: tests.fixtures.steps:identity
+        inputs:
+          value: "skipped"
