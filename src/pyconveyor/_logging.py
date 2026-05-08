@@ -57,5 +57,5 @@ def configure_logging(
         h.setFormatter(logging.Formatter(format))
         pkg_logger.addHandler(h)
 
-    if level <= logging.DEBUG:
+    if isinstance(level, int) and level <= logging.DEBUG:
         pkg_logger.addFilter(_SensitiveContentFilter())

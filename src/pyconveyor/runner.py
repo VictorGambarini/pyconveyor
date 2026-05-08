@@ -586,7 +586,7 @@ class PipelineRunner:
         spec["_parsers"] = parsers
 
         logger.info("Loaded pipeline '%s' with %d steps", path.name, len(steps))
-        return spec
+        return spec  # type: ignore[no-any-return]
 
     def _collect_step_names(self, steps: list[dict[str, Any]]) -> set[str]:
         names: set[str] = set()

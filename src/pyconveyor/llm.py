@@ -72,7 +72,7 @@ def make_client(
         return _PROVIDER_REGISTRY[provider](base_url=base_url, api_key=api_key, **kwargs)
 
     if provider == "openai_compat":
-        from openai import OpenAI  # type: ignore[import-untyped]
+        from openai import OpenAI
 
         client_kwargs: dict[str, Any] = {}
         if base_url:
@@ -83,7 +83,7 @@ def make_client(
 
     if provider == "anthropic":
         try:
-            from anthropic import Anthropic  # type: ignore[import-untyped]
+            from anthropic import Anthropic
         except ImportError as exc:
             raise ImportError(
                 "The 'anthropic' package is not installed. "

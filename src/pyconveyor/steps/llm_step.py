@@ -113,7 +113,7 @@ def _build_feedback(
             trim_blocks=True,
             lstrip_blocks=True,
         )
-        env.filters["truncate"] = _truncate_filter  # type: ignore[assignment]
+        env.filters["truncate"] = _truncate_filter
         tmpl = env.get_template(full_path.name)
         return tmpl.render(**template_vars)
 
@@ -121,7 +121,7 @@ def _build_feedback(
     from jinja2 import Environment, StrictUndefined
 
     env = Environment(undefined=StrictUndefined, trim_blocks=True, lstrip_blocks=True)
-    env.filters["truncate"] = _truncate_filter  # type: ignore[assignment]
+    env.filters["truncate"] = _truncate_filter
 
     if error_type == "schema":
         return env.from_string(_DEFAULT_SCHEMA_FEEDBACK).render(**template_vars)

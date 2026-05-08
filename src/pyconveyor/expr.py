@@ -61,7 +61,7 @@ _ALLOWED_NODES: frozenset[type] = frozenset(
 
 # ast.Index was removed in Python 3.9
 try:
-    _ALLOWED_NODES = _ALLOWED_NODES | {ast.Index}  # type: ignore[attr-defined]
+    _ALLOWED_NODES = _ALLOWED_NODES | {ast.Index}  # type: ignore[attr-defined,unused-ignore]  # noqa: F821
 except AttributeError:
     pass
 
@@ -287,7 +287,7 @@ class _NullSafeProxy:
         v = object.__getattribute__(self, "_v")
         if isinstance(other, _NullSafeProxy):
             other = object.__getattribute__(other, "_v")
-        return v == other  # type: ignore[return-value]
+        return bool(v == other)
 
     def __ne__(self, other: object) -> bool:
         return not self.__eq__(other)

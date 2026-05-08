@@ -16,7 +16,7 @@ _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
 def expand_env_vars(value: Any) -> Any:
     """Recursively expand ``${VAR_NAME}`` in YAML string values using ``os.environ``."""
     if isinstance(value, str):
-        def _replace(m: re.Match) -> str:  # type: ignore[type-arg]
+        def _replace(m: re.Match[str]) -> str:
             return os.environ.get(m.group(1), m.group(0))  # leave unexpanded if missing
 
         return _ENV_VAR_RE.sub(_replace, value)
@@ -62,7 +62,8 @@ def import_callable(
             key_path=key_path,
             suggestion=f"{module_path}:{suggestion}" if suggestion else None,
         )
-    return getattr(module, attr)  # type: ignore[return-value]
+    from typing import cast
+    return cast("Callable[..., Any]", getattr(module, attr))
 
 
 def suggest(target: str, candidates: list[str], cutoff: float = 0.6) -> str | None:
