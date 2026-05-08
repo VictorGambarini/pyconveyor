@@ -105,10 +105,10 @@ def _add_steps(
             else_branch = step.get("else")
             if then_branch:
                 then_steps = then_branch if isinstance(then_branch, list) else [then_branch]
-                last_then = _add_steps(lines, then_steps, parent=node_id, prefix=prefix)
+                _add_steps(lines, then_steps, parent=node_id, prefix=prefix)
             if else_branch:
                 else_steps = else_branch if isinstance(else_branch, list) else [else_branch]
-                last_else = _add_steps(lines, else_steps, parent=node_id, prefix=prefix)
+                _add_steps(lines, else_steps, parent=node_id, prefix=prefix)
             prev = node_id
         else:
             prev = node_id

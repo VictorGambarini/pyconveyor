@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..runner import RunContext
@@ -12,9 +13,9 @@ logger = logging.getLogger("pyconveyor.runner")
 
 def execute_condition_step(
     step: dict[str, Any],
-    rctx: "RunContext",
+    rctx: RunContext,
     eval_expr: Callable[[str], Any],
-    execute_branch: Callable[[list[dict[str, Any]], "RunContext"], Any],
+    execute_branch: Callable[[list[dict[str, Any]], RunContext], Any],
 ) -> Any:
     """Evaluate ``if:`` and run the matching branch.
 

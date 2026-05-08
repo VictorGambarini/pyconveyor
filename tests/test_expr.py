@@ -3,16 +3,14 @@ from __future__ import annotations
 
 import pytest
 
-from pyconveyor.errors import ExpressionSecurityError, ExpressionEvalError
+from pyconveyor.errors import ExpressionEvalError, ExpressionSecurityError
 from pyconveyor.expr import (
     _NullSafeProxy,
     _StepsProxy,
     evaluate_expression,
     resolve_value,
     validate_expression,
-    validate_all_expressions,
 )
-
 
 # ── validate_expression ────────────────────────────────────────────────────────
 

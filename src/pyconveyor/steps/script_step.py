@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..runner import RunContext
@@ -14,7 +15,7 @@ def execute_script_step(
     step: dict[str, Any],
     resolved_inputs: dict[str, Any],
     fn: Callable[..., Any],
-    rctx: "RunContext",
+    rctx: RunContext,
     dry_run: bool = False,
 ) -> Any:
     """Execute a transform / io / validate step.

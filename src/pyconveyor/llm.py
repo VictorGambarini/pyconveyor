@@ -11,7 +11,8 @@ import json
 import logging
 import re
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .errors import ParseError
 
@@ -258,7 +259,7 @@ def call_llm(
 
 
 def _call_anthropic(
-    client: "_AnthropicWrapper",
+    client: _AnthropicWrapper,
     messages: list[dict[str, str]],
     model: str,
     timeout: int,
@@ -350,7 +351,7 @@ class _MockClient:
         self._call_count = 0
 
     @property
-    def chat(self) -> "_MockChatNamespace":
+    def chat(self) -> _MockChatNamespace:
         return _MockChatNamespace(self)
 
     def _next_response(self) -> str:
@@ -365,7 +366,7 @@ class _MockChatNamespace:
         self._client = client
 
     @property
-    def completions(self) -> "_MockCompletions":
+    def completions(self) -> _MockCompletions:
         return _MockCompletions(self._client)
 
 
@@ -373,7 +374,7 @@ class _MockCompletions:
     def __init__(self, client: _MockClient) -> None:
         self._client = client
 
-    def create(self, **kwargs: Any) -> "_MockResponse":
+    def create(self, **kwargs: Any) -> _MockResponse:
         return _MockResponse(self._client._next_response())
 
 

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import ParseError, SchemaValidationError
 from ..llm import call_llm, extract_json
-from ..prompt import render_prompt, render_prompt_string
+from ..prompt import render_prompt
 
 if TYPE_CHECKING:
     from ..runner import RunContext
@@ -134,7 +134,7 @@ def execute_llm_step(
     client: Any,
     model_config: dict[str, Any],
     pipeline_dir: Path,
-    rctx: "RunContext",
+    rctx: RunContext,
     cache: Any | None = None,
     use_cache: bool = True,
     refresh_cache: bool = False,
@@ -243,7 +243,6 @@ def execute_llm_step(
     attempt_logs: list[AttemptLog] = []
     messages = list(base_messages)
     last_error: Exception | None = None
-    last_raw: str = ""
     result: Any = None
 
     for attempt_num in range(1, max_attempts + 1):
@@ -278,7 +277,6 @@ def execute_llm_step(
                 cache.set(provider, model_name, cache_key_messages, sampling_params, raw)
 
         log.raw_output = raw
-        last_raw = raw
         logger.debug("Step '%s' attempt %d raw response: %s", name, attempt_num, raw[:200])
 
         # ── Parse ──────────────────────────────────────────────────────────────

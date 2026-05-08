@@ -4,8 +4,9 @@ from __future__ import annotations
 import importlib
 import os
 import re
+from collections.abc import Callable
 from difflib import get_close_matches
-from typing import Any, Callable
+from typing import Any
 
 from .errors import CallableImportError
 

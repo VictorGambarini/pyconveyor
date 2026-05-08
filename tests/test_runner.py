@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from pyconveyor import PipelineRunner, RunContext
-from pyconveyor.errors import PipelineAbortError, PipelineLoadError, StepConfigError
+from pyconveyor.errors import PipelineLoadError
 
 PIPELINES = Path(__file__).parent / "fixtures" / "pipelines"
 

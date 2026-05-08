@@ -2,18 +2,19 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..runner import PipelineRunner, RunContext
+    from ..runner import RunContext
 
 logger = logging.getLogger("pyconveyor.runner")
 
 
 def execute_parallel_step(
     step: dict[str, Any],
-    rctx: "RunContext",
+    rctx: RunContext,
     execute_single: Callable[..., Any],
     **kwargs: Any,
 ) -> dict[str, Any]:

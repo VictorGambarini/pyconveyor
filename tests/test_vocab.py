@@ -1,8 +1,6 @@
 """Tests for vocabulary matching."""
 from __future__ import annotations
 
-import pytest
-
 from pyconveyor.vocab import Vocabulary
 
 

@@ -6,11 +6,11 @@ This is the heart of pyconveyor.  You describe a workflow in YAML, point
 from __future__ import annotations
 
 import logging
-import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 from dotenv import load_dotenv
@@ -24,14 +24,13 @@ from .errors import (
     PipelineLoadError,
     SchemaRefError,
     StepConfigError,
-    StepRefError,
 )
 from .expr import (
     _NullSafeProxy,
     _StepsProxy,
+    resolve_value,
     validate_all_expressions,
     validate_expression,
-    resolve_value,
 )
 from .llm import make_client
 from .steps.condition_step import execute_condition_step

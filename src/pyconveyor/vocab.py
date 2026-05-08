@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import difflib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger("pyconveyor.vocab")
@@ -85,7 +85,7 @@ class Vocabulary:
         return value, "novel"
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Vocabulary":
+    def from_dict(cls, data: dict[str, Any]) -> Vocabulary:
         """Build from a YAML-loaded dict."""
         known = set(data.get("known", []))
         return cls(
@@ -96,7 +96,7 @@ class Vocabulary:
         )
 
 
-def VocabField(
+def VocabField(  # noqa: N802
     vocab: Vocabulary,
     **field_kwargs: Any,
 ) -> Any:
@@ -113,7 +113,6 @@ def VocabField(
         use ``add_vocab_fields`` as a class decorator.  ``VocabField`` is
         retained as a convenience shim.
     """
-    from pydantic import field_validator
     from pydantic.fields import FieldInfo
 
     # Attach vocab metadata so the runner can read it back

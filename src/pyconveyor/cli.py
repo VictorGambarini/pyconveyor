@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
-
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
@@ -98,16 +96,16 @@ def _cmd_init(args: Any) -> None:
         gitignore.write_text(gitignore_entries.lstrip("\n"), encoding="utf-8")
 
     print(f"Initialised pipeline in '{target}'")
-    print(f"  pipeline.yaml       — pipeline spec")
-    print(f"  prompts/extract.j2  — example prompt template")
-    print(f"  schemas.py          — example Pydantic schema")
-    print(f"  steps.py            — example step function")
-    print(f"  .vscode/settings.json — editor autocomplete")
+    print("  pipeline.yaml       — pipeline spec")
+    print("  prompts/extract.j2  — example prompt template")
+    print("  schemas.py          — example Pydantic schema")
+    print("  steps.py            — example step function")
+    print("  .vscode/settings.json — editor autocomplete")
     print()
     print("Next steps:")
     print(f"  cd {target}")
-    print(f"  export OPENAI_API_KEY=sk-...")
-    print(f"  pyconveyor run pipeline.yaml --input '{{\"document\": \"your text here\"}}'")
+    print("  export OPENAI_API_KEY=sk-...")
+    print("  pyconveyor run pipeline.yaml --input '{\"document\": \"your text here\"}'")
 
 
 def _write_template(path: Path, content: str) -> None:
@@ -196,8 +194,8 @@ def _serialise(value: Any) -> Any:
 # ── validate ───────────────────────────────────────────────────────────────────
 
 def _cmd_validate(args: Any) -> None:
-    from .runner import PipelineRunner
     from .errors import PipelineLoadError
+    from .runner import PipelineRunner
 
     try:
         PipelineRunner(args.pipeline)

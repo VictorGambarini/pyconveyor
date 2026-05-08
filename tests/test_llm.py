@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from pyconveyor.errors import ParseError
 from pyconveyor.llm import (
     _MockClient,
     call_llm,
@@ -10,8 +11,6 @@ from pyconveyor.llm import (
     make_client,
     register_provider,
 )
-from pyconveyor.errors import ParseError
-
 
 # ── extract_json ──────────────────────────────────────────────────────────────
 

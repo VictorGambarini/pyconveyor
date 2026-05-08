@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, Generator, Iterator
+from typing import Any
 
 from .runner import PipelineRunner, RunContext
 
