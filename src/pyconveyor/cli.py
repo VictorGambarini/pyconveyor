@@ -129,9 +129,11 @@ def _cmd_run(args: Any) -> None:
     elif args.quiet:
         _logging.getLogger("pyconveyor").setLevel(_logging.ERROR)
 
-    # Load input
+    # Load input — inline JSON string or file path
     if args.input == "-":
         raw = sys.stdin.read()
+    elif args.input.lstrip().startswith(("{", "[")):
+        raw = args.input
     else:
         raw = Path(args.input).read_text(encoding="utf-8")
     try:

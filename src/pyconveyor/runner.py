@@ -6,6 +6,7 @@ This is the heart of pyconveyor.  You describe a workflow in YAML, point
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -558,6 +559,11 @@ class PipelineRunner:
             raise PipelineLoadError(f"Pipeline file not found: {path}", file=file_str) from e
 
         spec = expand_env_vars(raw)
+
+        # Ensure the pipeline directory is importable (for local schemas.py etc.)
+        pipeline_dir_str = str(path.parent)
+        if pipeline_dir_str not in sys.path:
+            sys.path.insert(0, pipeline_dir_str)
 
         # Collect model names
         model_names = set(spec.get("models", {}).keys())
