@@ -46,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pyconveyor visualise` — produce Mermaid DAG diagram
 - Standard `logging` integration under `pyconveyor.*` namespaces
 - `SCHEMA.md` — YAML format reference as a public contract
-- Full unit test suite with fixture pipelines
+- Full unit test suite with fixture pipelines — 167 tests, 80% line coverage
+
+### Fixed
+
+- **ISSUE-001**: Fixed 52 ruff lint errors (unused imports, undefined names, bare excepts, unused variables, type annotation issues).
+- **ISSUE-002**: Fixed 12 mypy strict-mode type errors (missing `-> None` returns, untyped dicts, improper Optional handling).
+- **ISSUE-003**: `pyconveyor validate` / `pyconveyor run` now insert the pipeline directory into `sys.path` so local schema modules are importable without installation.
+- **ISSUE-004**: `pyconveyor run --input` now accepts an inline JSON string starting with `{` or `[`, eliminating the spurious `FileNotFoundError` on inline JSON input.
 
 [0.1.0]: https://github.com/VictorGambarini/pyconveyor/releases/tag/v0.1.0
