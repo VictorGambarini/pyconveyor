@@ -105,6 +105,31 @@ class TestBatchRunner:
         result = br.run_all(items)
         assert len(result) == 1
 
+    def test_missing_key_falls_back_to_id_builtin(self):
+        # Regression: item missing the key field → id(item) used, run still completes
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1, progress=False)
+        items = [{"name": "Ada"}]  # no "id" field
+        result = br.run_all(items, key="id")
+        assert len(result) == 1
+        item_id, rctx = list(result)[0]
+        assert isinstance(item_id, int)  # id(item) returns an int
+        assert not rctx.failed
+
+    def test_worker_exception_creates_failed_rctx(self):
+        # Regression: if runner.run() itself raises unexpectedly, batch wraps it
+        from unittest.mock import patch
+
+        from pyconveyor.runner import PipelineRunner
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1, progress=False)
+        items = [{"name": "Ada", "id": "boom"}]
+        with patch.object(PipelineRunner, "run", side_effect=RuntimeError("boom")):
+            result = br.run_all(items)
+        assert len(result) == 1
+        item_id, rctx = list(result)[0]
+        assert item_id == "boom"
+        assert rctx.failed
+        assert "boom" in str(rctx.failure_state.exception)
+
 
 class TestBatchResult:
     def _make(self, n_success: int = 2, n_fail: int = 1) -> BatchResult:

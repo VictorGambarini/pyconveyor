@@ -289,3 +289,43 @@ class TestCliBatch:
         record = json.loads(lines[0])
         assert record["ok"] is True
 
+    def test_batch_non_dict_jsonl_line_exits_1(self, tmp_path: Path) -> None:
+        # Regression: JSONL line that is valid JSON but not an object (e.g. array) must exit 1
+        pipeline = self._write_pipeline(tmp_path)
+        items_file = tmp_path / "bad.jsonl"
+        items_file.write_text('["not", "an", "object"]\n')
+        code, output = _run_cli(
+            "batch", str(pipeline), "--input", str(items_file), "--no-progress"
+        )
+        assert code == 1
+        assert "not a JSON object" in output
+
+    def test_batch_blank_lines_skipped(self, tmp_path: Path) -> None:
+        # Blank lines in JSONL are skipped; one valid item should succeed
+        pipeline = self._write_pipeline(tmp_path)
+        items_file = tmp_path / "blanks.jsonl"
+        items_file.write_text('\n{"id": "a"}\n\n')
+        code, output = _run_cli(
+            "batch", str(pipeline), "--input", str(items_file), "--no-progress"
+        )
+        assert code == 0
+        lines = [ln for ln in output.strip().splitlines() if ln.strip()]
+        assert len(lines) == 1
+
+    def test_batch_failed_item_shows_error(self, tmp_path: Path) -> None:
+        # When a pipeline item fails, output record has ok=False and error field
+        from unittest.mock import patch
+
+        from pyconveyor import PipelineRunner
+        pipeline = self._write_pipeline(tmp_path)
+        items_file = self._write_jsonl(tmp_path, [{"id": "fail-item"}])
+        with patch.object(PipelineRunner, "run", side_effect=RuntimeError("pipeline boom")):
+            code, output = _run_cli(
+                "batch", str(pipeline), "--input", str(items_file), "--no-progress"
+            )
+        assert code == 0  # batch exits 0 even with failures (check ok field)
+        lines = [ln for ln in output.strip().splitlines() if ln.strip()]
+        record = json.loads(lines[0])
+        assert record["ok"] is False
+        assert "pipeline boom" in record["error"]
+

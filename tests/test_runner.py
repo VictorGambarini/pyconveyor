@@ -390,3 +390,20 @@ class TestLifecycleHooks:
         runner.on_llm_call(lambda s, m, r: (_ for _ in ()).throw(RuntimeError("llm hook error")))
         rctx = runner.run({"name": "Ada"})
         assert not rctx.failed
+
+    def test_on_run_end_called_when_pipeline_fails(self):
+        # Regression: on_run_end must fire even when pipeline aborts
+        seen = []
+        runner = _runner("hello.yaml")
+        runner.on_run_end(lambda rctx: seen.append(rctx.failed))
+        from unittest.mock import patch
+        with patch("pyconveyor.runner.execute_llm_step", side_effect=RuntimeError("forced")):
+            rctx = runner.run({"name": "Ada"})
+        assert rctx.failed
+        assert seen == [True]  # on_run_end fired with the failed rctx
+
+    def test_on_step_end_hook_error_does_not_abort(self):
+        runner = _runner("hello.yaml")
+        runner.on_step_end(lambda name, val, rctx: (_ for _ in ()).throw(RuntimeError("step hook error")))
+        rctx = runner.run({"name": "Ada"})
+        assert not rctx.failed
