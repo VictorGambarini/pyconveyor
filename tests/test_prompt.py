@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pyconveyor.prompt import render_prompt, render_prompt_string, PromptRenderError
+from pyconveyor.prompt import PromptRenderError, render_prompt, render_prompt_string
 
 
 class TestRenderPromptString:

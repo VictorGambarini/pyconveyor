@@ -83,9 +83,6 @@ class TestSensitiveContentFilter:
         configure_logging(level=logging.DEBUG)
         logger = logging.getLogger("pyconveyor")
 
-        records: list[logging.LogRecord] = []
-        handler = logging.handlers_collector(records) if hasattr(logging, "handlers_collector") else None
-
         # Use a custom handler to capture records
         captured: list[logging.LogRecord] = []
 

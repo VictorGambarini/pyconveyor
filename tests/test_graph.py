@@ -3,9 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from pyconveyor.graph import generate_mermaid, _label, _node_shape
+from pyconveyor.graph import _label, _node_shape, generate_mermaid
 
 PIPELINES = Path(__file__).parent / "fixtures" / "pipelines"
 
