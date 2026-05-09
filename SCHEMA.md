@@ -1,0 +1,348 @@
+# Pipeline YAML Schema Reference
+
+This document is the **public contract** for `pyconveyor` pipeline files.
+Every field, its type, whether it's required, its default value, and an example are listed here.
+
+---
+
+## Top-level keys
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `models` | map | yes | — | Named model configurations (see [Model](#model)) |
+| `steps` | list | yes | — | Ordered list of steps to execute |
+| `schemas` | map | no | — | Named schema imports (alternative to inline `schema:`) |
+| `parsers` | map | no | — | Named parser imports |
+| `vocabularies` | map | no | — | Named [Vocabulary](#vocabulary) definitions |
+
+---
+
+## Model
+
+Defined under `models.<name>`:
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `provider` | string | yes | — | One of `openai_compat`, `anthropic`, `mock`, or a registered custom name |
+| `model` | string | yes* | — | Model identifier sent to the API (*not required for `mock` provider) |
+| `base_url` | string | no | — | Override the API base URL (e.g. for Ollama: `http://localhost:11434/v1`) |
+| `api_key` | string | no | — | API key. Supports `${ENV_VAR}` substitution. Defaults to `OPENAI_API_KEY` env var. |
+| `temperature` | float | no | — | Sampling temperature |
+| `top_p` | float | no | — | Nucleus sampling top-p |
+| `max_tokens` | integer | no | — | Maximum completion tokens |
+| `seed` | integer | no | — | Random seed for reproducibility |
+| `timeout` | integer | no | `120` | HTTP timeout in seconds |
+| `json_mode` | boolean | no | auto | Force JSON response format. Auto-detected if not set. |
+| `max_retries` | integer | no | `2` | HTTP-level retry count for 429/5xx errors |
+| `retry_delay` | float | no | `1.0` | Base delay (seconds) for exponential backoff |
+| `extra_params` | map | no | — | Extra key/value pairs forwarded verbatim to the API |
+| `mock_responses` | list[string] | no | — | Response sequence for `mock` provider. Clamps to last entry. |
+| `cache` | map | no | — | See [Cache config](#cache-config) |
+
+**Example:**
+```yaml
+models:
+  gpt4:
+    provider: openai_compat
+    model: gpt-4o
+    temperature: 0.2
+    api_key: ${OPENAI_API_KEY}
+  local:
+    provider: openai_compat
+    model: llama3.2
+    base_url: http://localhost:11434/v1
+    api_key: ollama
+```
+
+---
+
+## Cache config
+
+Defined under `models.<name>.cache`:
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `enabled` | boolean | yes | — | Enable file-based response cache |
+| `dir` | string | no | `.pyconveyor-cache` | Directory to store cache files |
+| `ttl_days` | integer | no | — | Evict entries older than this many days |
+
+**Example:**
+```yaml
+models:
+  default:
+    provider: openai_compat
+    model: gpt-4o
+    cache:
+      enabled: true
+      dir: .cache
+      ttl_days: 7
+```
+
+---
+
+## Step (common fields)
+
+All step types share these fields:
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `name` | string | yes | — | Unique identifier for this step. Referenced in expressions as `steps.<name>`. |
+| `type` | string | no | `llm` | One of `llm`, `transform`, `io`, `validate`, `parallel`, `condition` |
+| `condition` | expression | no | — | Skip this step if expression evaluates falsy |
+| `on_error` | string | no | `raise` | One of `raise`, `continue`, `skip_remaining` |
+| `on_failure` | string | no | — | Dotted import path `module:fn` called on error: `fn(step_name, exc, rctx)` |
+| `optional` | boolean | no | `false` | For child steps inside `parallel`: failure doesn't abort the group |
+
+---
+
+## LLM step (`type: llm`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `model` | string | yes | — | Must match a key under `models:` |
+| `prompt` | string | yes | — | Jinja2 template filename (resolved relative to the pipeline file) |
+| `system` | string | no | — | System message. Inline string or `{{ expression }}`. |
+| `schema` | string | no | — | Dotted import path `module:ClassName` for a Pydantic model |
+| `parser` | string | no | — | Named parser key from top-level `parsers:`, or `module:fn` |
+| `vars` | map | no | — | Extra template variables. Values may be `{{ expressions }}`. |
+| `max_attempts` | integer | no | `3` if schema set else `1` | Retry budget |
+| `error_feedback` | boolean | no | `true` if schema set | Inject validation errors into retry context |
+| `retry_on` | list[string] | no | `[parse, schema]` | Which error types trigger a retry |
+| `retry_hint` | string | no | `""` | Custom hint appended to every error feedback message |
+| `schema_strict` | boolean | no | `true` | Fail if the response has extra fields (Pydantic strict mode) |
+| `error_template` | string | no | — | Custom Jinja2 template for error feedback messages |
+| `max_feedback_tokens` | integer | no | `4000` | Max characters of previous output echoed in feedback |
+
+**Example:**
+```yaml
+steps:
+  - name: extract
+    type: llm
+    model: gpt4
+    prompt: extract.j2
+    schema: schemas:Metadata
+    max_attempts: 3
+    vars:
+      focus: "{{ ctx.focus_area }}"
+```
+
+---
+
+## Transform step (`type: transform`)
+
+Runs a Python callable with the resolved inputs as keyword arguments.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `fn` | string | yes | — | `module:callable` import path |
+| `inputs` | map | no | — | Keyword arguments. Values may be `{{ expressions }}`. |
+
+**Example:**
+```yaml
+steps:
+  - name: clean
+    type: transform
+    fn: steps:clean_text
+    inputs:
+      text: "{{ ctx.raw_text }}"
+```
+
+---
+
+## IO step (`type: io`)
+
+Like `transform` but semantically intended for I/O operations (file reads, HTTP, etc.).
+Uses the same `fn` + `inputs` fields.
+
+---
+
+## Validate step (`type: validate`)
+
+Like `transform` but the callable must return a truthy value; a falsy return raises
+`SchemaValidationError`.  Uses the same `fn` + `inputs` fields.
+
+---
+
+## Parallel step (`type: parallel`)
+
+Runs child steps concurrently using a thread pool.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `steps` | list | yes | — | Child step definitions (any step type) |
+
+The result of a `parallel` step is a `dict` keyed by child step name.
+
+**Example:**
+```yaml
+steps:
+  - name: multi_extract
+    type: parallel
+    steps:
+      - name: primary
+        type: llm
+        model: gpt4
+        prompt: extract.j2
+        schema: schemas:Metadata
+      - name: reviewer
+        type: llm
+        model: gpt4
+        prompt: review.j2
+        schema: schemas:Review
+```
+
+---
+
+## Condition step (`type: condition`)
+
+Branches execution based on an expression.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `if` | expression | yes | — | Boolean expression. Uses `ctx.*` and `steps.*`. |
+| `then` | list | yes | — | Steps to run when `if` is truthy |
+| `else` | list | no | — | Steps to run when `if` is falsy |
+
+**Example:**
+```yaml
+steps:
+  - name: check_language
+    type: condition
+    if: "steps.detect.language == 'en'"
+    then:
+      - name: en_extract
+        type: llm
+        model: gpt4
+        prompt: en_extract.j2
+        schema: schemas:English
+    else:
+      - name: translate_first
+        type: transform
+        fn: steps:translate
+        inputs:
+          text: "{{ ctx.document }}"
+```
+
+---
+
+## Expressions
+
+Expressions appear in `{{ }}` delimiters inside YAML string values, in `condition:` fields,
+and in `if:` fields of condition steps.
+
+### Namespace
+
+| Name | Type | Description |
+|------|------|-------------|
+| `ctx` | proxy | Wraps the input dict. `ctx.missing_key` returns `None` rather than erroring. |
+| `steps` | proxy | Wraps completed step results. `steps.name.field` delegates to the result value. |
+
+### Allowed operations
+
+- Attribute access: `ctx.field`, `steps.extract.primary`
+- Item lookup: `ctx["key"]`
+- Comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in`
+- Identity checks (normalised): `is not none` → `!= None`, `is none` → `== None`
+- Boolean operators: `and`, `or`, `not`
+- Ternary: `value if condition else fallback`
+- Literals: strings, numbers, booleans, `None`, lists and tuples of literals
+- Allowed helpers: `first_non_none(a, b, ...)`, `active_models(ctx.models)`, `len(collection)`
+
+### Security
+
+Any expression containing disallowed AST nodes (lambdas, comprehensions, imports, etc.)
+raises `ExpressionSecurityError` at pipeline **load time**, before any run begins.
+
+### Examples
+
+```yaml
+# Conditional step gate
+condition: "ctx.language is not none"
+
+# Inline substitution
+vars:
+  greeting: "Hello {{ ctx.name }}!"
+
+# Ternary
+vars:
+  mode: "{{ 'strict' if ctx.strict else 'lenient' }}"
+
+# Reference a previous step's output
+inputs:
+  text: "{{ steps.clean.value }}"
+```
+
+---
+
+## Environment variable expansion
+
+Any YAML string value may contain `${VAR_NAME}` references which are expanded from
+the process environment (and `.env` files loaded via `python-dotenv`).
+
+```yaml
+models:
+  default:
+    api_key: ${OPENAI_API_KEY}
+    base_url: ${LLM_BASE_URL}
+```
+
+---
+
+## Vocabulary
+
+Defined under `vocabularies.<name>`:
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `known` | list[string] | yes | — | Canonical terms |
+| `label` | string | no | `"vocabulary"` | Human-readable label used in summaries |
+| `fuzzy_match` | boolean | no | `true` | Enable substring + edit-distance matching |
+| `case_sensitive` | boolean | no | `false` | Whether matching is case-sensitive |
+
+**Example:**
+```yaml
+vocabularies:
+  plastic_type:
+    known: [PET, PE, PLA, ABS, PS]
+    fuzzy_match: true
+    case_sensitive: false
+```
+
+---
+
+## Full example
+
+```yaml
+models:
+  default:
+    provider: openai_compat
+    model: gpt-4o
+    temperature: 0.1
+    api_key: ${OPENAI_API_KEY}
+    cache:
+      enabled: true
+      ttl_days: 7
+
+vocabularies:
+  material:
+    known: [steel, aluminium, copper, plastic]
+
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt: extract.j2
+    schema: schemas:Metadata
+    max_attempts: 3
+
+  - name: check
+    type: condition
+    if: "steps.extract is not none"
+    then:
+      - name: enrich
+        type: transform
+        fn: steps:enrich
+        inputs:
+          data: "{{ steps.extract }}"
+    on_error: continue
+```

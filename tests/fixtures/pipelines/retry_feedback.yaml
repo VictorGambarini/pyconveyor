@@ -1,0 +1,21 @@
+# Pipeline for testing retry-with-feedback (§10).
+# Mock provides: bad-JSON → schema-invalid → valid.
+
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - "not json at all"
+      - '{"message": 12345, "language": "French"}'
+      - '{"message": "Bonjour!", "language": "French"}'
+
+steps:
+  - name: greet
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    max_attempts: 3
+    error_feedback: true
+    retry_on: [parse, schema]

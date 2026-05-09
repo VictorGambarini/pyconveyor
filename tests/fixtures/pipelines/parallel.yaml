@@ -1,0 +1,31 @@
+# Pipeline with a parallel step.
+
+models:
+  primary:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "Hello!", "language": "English"}'
+  reviewer:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "Hola!", "language": "Spanish"}'
+
+steps:
+  - name: extract
+    type: parallel
+    steps:
+      - name: primary
+        type: llm
+        model: primary
+        prompt: greet.j2
+        schema: tests.fixtures.schemas:Greeting
+        max_attempts: 1
+
+      - name: reviewer
+        type: llm
+        model: reviewer
+        prompt: greet.j2
+        schema: tests.fixtures.schemas:Greeting
+        max_attempts: 1

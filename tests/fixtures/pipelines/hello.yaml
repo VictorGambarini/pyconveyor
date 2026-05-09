@@ -1,0 +1,17 @@
+# Minimal single-step LLM pipeline using the mock provider.
+# Used by: tests/test_runner.py
+
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+
+steps:
+  - name: greet
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    max_attempts: 3
