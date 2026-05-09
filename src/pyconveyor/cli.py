@@ -224,6 +224,15 @@ def _cmd_batch(args: Any) -> None:
         print("Error: no items found in input", file=sys.stderr)
         sys.exit(1)
 
+    reserved_keys = {"ok", "error", "steps"}
+    if args.key in reserved_keys:
+        print(
+            f"Error: --key '{args.key}' conflicts with reserved output fields"
+            f" ({', '.join(sorted(reserved_keys))}). Choose a different key.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     runner = BatchRunner(
         args.pipeline,
         max_workers=args.workers,
@@ -231,16 +240,20 @@ def _cmd_batch(args: Any) -> None:
     )
 
     output_lines: list[str] = []
+    ok_count = 0
     for item_id, rctx in runner.run(
         items,
         key=args.key,
         use_cache=not args.no_cache,
         dry_run=args.dry_run,
     ):
-        record: dict[str, Any] = {args.key: item_id, "ok": not rctx.failed}
+        record: dict[str, Any] = {}
+        record[args.key] = item_id
+        record["ok"] = not rctx.failed
         if rctx.failed and rctx.failure_state:
             record["error"] = str(rctx.failure_state.exception)
         else:
+            ok_count += 1
             record["steps"] = {
                 name: _serialise(sr.value)
                 for name, sr in rctx.steps.items()
@@ -250,9 +263,8 @@ def _cmd_batch(args: Any) -> None:
     out_str = "\n".join(output_lines)
     if args.output:
         Path(args.output).write_text(out_str + "\n", encoding="utf-8")
-        summary_ok = sum(1 for ln in output_lines if '"ok": true' in ln)
-        summary_fail = len(output_lines) - summary_ok
-        print(f"Batch complete: {summary_ok} succeeded, {summary_fail} failed → {args.output}")
+        summary_fail = len(output_lines) - ok_count
+        print(f"Batch complete: {ok_count} succeeded, {summary_fail} failed → {args.output}")
     else:
         print(out_str)
 

@@ -97,6 +97,11 @@ Signature: `fn(item_id: Any, rctx: RunContext) -> None`
 - Hooks run synchronously in the calling thread; long-running hooks block step
   execution.
 
+!!! note "`on_llm_call` and parallel steps"
+    `on_llm_call` fires for LLM calls in top-level steps only. LLM calls made
+    inside a `type: parallel` branch are not currently surfaced to this hook.
+    Use `on_step_end` to observe parallel step results.
+
 ---
 
 ## Combining hooks

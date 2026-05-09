@@ -329,3 +329,14 @@ class TestCliBatch:
         assert record["ok"] is False
         assert "pipeline boom" in record["error"]
 
+    def test_batch_reserved_key_exits_1(self, tmp_path: Path) -> None:
+        # Regression: --key ok|error|steps would silently overwrite output fields
+        pipeline = self._write_pipeline(tmp_path)
+        items_file = self._write_jsonl(tmp_path, [{"ok": "x"}])
+        code, output = _run_cli(
+            "batch", str(pipeline), "--input", str(items_file),
+            "--key", "ok", "--no-progress",
+        )
+        assert code == 1
+        assert "reserved" in output.lower() or "conflict" in output.lower()
+
