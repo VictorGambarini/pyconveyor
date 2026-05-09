@@ -219,11 +219,29 @@ class PipelineRunner:
         self._clients: dict[str, Any] = {}  # model_name → client (lazy init)
         self._caches: dict[str, ResponseCache | None] = {}
         self._hooks: dict[str, list[Callable[..., Any]]] = {
+            "on_run_start": [],
+            "on_run_end": [],
             "on_step_end": [],
             "on_llm_call": [],
         }
 
     # ── Hooks ──────────────────────────────────────────────────────────────────
+
+    def on_run_start(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Register a callback called before any steps execute.
+
+        Signature: ``fn(input_data: dict) -> None``
+        """
+        self._hooks["on_run_start"].append(fn)
+        return fn
+
+    def on_run_end(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Register a callback called after the run completes (success or failure).
+
+        Signature: ``fn(rctx: RunContext) -> None``
+        """
+        self._hooks["on_run_end"].append(fn)
+        return fn
 
     def on_step_end(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """Register a callback called after each step completes.
@@ -269,6 +287,12 @@ class PipelineRunner:
         rctx = RunContext(input_data)
         effective_models = self._effective_models(model_overrides)
 
+        for hook in self._hooks["on_run_start"]:
+            try:
+                hook(input_data)
+            except Exception as he:
+                logger.warning("on_run_start hook error: %s", he)
+
         try:
             self._run_steps(
                 self._spec.get("steps", []),
@@ -282,6 +306,12 @@ class PipelineRunner:
             rctx.failed = True
             rctx.failure_state = FailureState(e.step_name, e.cause)
             logger.error("Pipeline aborted: %s", e)
+
+        for hook in self._hooks["on_run_end"]:
+            try:
+                hook(rctx)
+            except Exception as he:
+                logger.warning("on_run_end hook error: %s", he)
 
         return rctx
 
@@ -322,13 +352,20 @@ class PipelineRunner:
                 rctx._step_results[name] = sr
                 rctx.metadata["attempt_logs"].extend(attempt_logs)
 
-                # Count LLM calls
+                # Count LLM calls and fire on_llm_call hooks
                 if step.get("type", "llm") == "llm" or (step.get("type") is None and "prompt" in step):
                     rctx._llm_calls += len(attempt_logs)
+                    model_ref = step.get("model", "")
+                    model_id = effective_models.get(model_ref, {}).get("model", model_ref)
                     for al in attempt_logs:
                         if al.tokens:
                             rctx._total_input_tokens += al.tokens.get("prompt_tokens", 0)
                             rctx._total_output_tokens += al.tokens.get("completion_tokens", 0)
+                        for hook in self._hooks["on_llm_call"]:
+                            try:
+                                hook(name, model_id, al.raw_output)
+                            except Exception as he:
+                                logger.warning("on_llm_call hook error: %s", he)
 
                 for hook in self._hooks["on_step_end"]:
                     try:

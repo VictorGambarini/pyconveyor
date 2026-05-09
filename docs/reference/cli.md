@@ -1,6 +1,6 @@
 # CLI Reference
 
-pyconveyor ships a CLI with five subcommands.
+pyconveyor ships a CLI with six subcommands.
 
 ```
 pyconveyor <command> [options]
@@ -112,6 +112,74 @@ pyconveyor run pipeline.yaml --input '{"document": "text"}'
 | `0` | Pipeline succeeded |
 | `1` | Invalid input JSON or startup error |
 | `2` | Pipeline failed (a required step exhausted retries) |
+
+---
+
+## `pyconveyor batch`
+
+Process a JSONL input file through a pipeline with parallel workers.
+
+```bash
+pyconveyor batch <pipeline> [options]
+```
+
+**Arguments:**
+
+| Argument | Description |
+|---|---|
+| `pipeline` | Path to the pipeline YAML file |
+
+**Options:**
+
+| Option | Default | Description |
+|---|---|---|
+| `--input`, `-i` | `-` (stdin) | JSONL file — one JSON object per line — or `-` for stdin |
+| `--output`, `-o` | stdout | Output JSONL file. If omitted, results are printed to stdout |
+| `--workers`, `-w` | `4` | Number of parallel worker threads |
+| `--key`, `-k` | `id` | Field name used as the item identifier in output |
+| `--no-progress` | off | Suppress the tqdm progress bar |
+| `--no-cache` | off | Bypass the development response cache |
+| `--dry-run` | off | Skip LLM calls; returns `null` for all step results |
+
+**Input format:**
+
+One JSON object per line (JSONL / newline-delimited JSON):
+
+```jsonl
+{"id": "doc-1", "text": "First document"}
+{"id": "doc-2", "text": "Second document"}
+{"id": "doc-3", "text": "Third document"}
+```
+
+**Output format:**
+
+One JSON result per line, in completion order (not submission order):
+
+```jsonl
+{"id": "doc-2", "ok": true, "steps": {"extract": {"title": "..."}}}
+{"id": "doc-1", "ok": true, "steps": {"extract": {"title": "..."}}}
+{"id": "doc-3", "ok": false, "error": "Pipeline aborted at step 'extract': ..."}
+```
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | Batch completed (individual items may have failed — check `"ok"` field) |
+| `1` | Input error (invalid JSONL, empty file) |
+
+**Example:**
+
+```bash
+# Process 1000 documents with 8 workers, saving to results.jsonl
+pyconveyor batch pipeline.yaml \
+  --input documents.jsonl \
+  --output results.jsonl \
+  --workers 8
+
+# Pipe from a generator
+generate-docs | pyconveyor batch pipeline.yaml --output results.jsonl
+```
 
 ---
 

@@ -53,6 +53,9 @@ nav:
     - Step Types: guides/step-types.md
     - Validation Feedback: guides/validation-feedback.md
     - Expression Language: guides/expressions.md
+    - Batch Processing: guides/batch.md
+    - Hooks: guides/hooks.md
+    - Vocabulary Fields: guides/vocab.md
     - Providers: guides/providers.md
     - LLM Utilities: guides/llm-utilities.md
     - Editor Setup: guides/editor-setup.md

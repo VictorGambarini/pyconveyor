@@ -41,6 +41,20 @@ def main() -> None:
     p_schema = sub.add_parser("schema", help="Emit JSONSchema for the pipeline YAML format")
     p_schema.add_argument("--indent", type=int, default=2)
 
+    # batch
+    p_batch = sub.add_parser("batch", help="Run a pipeline over a JSONL input file")
+    p_batch.add_argument("pipeline", help="Path to pipeline.yaml")
+    p_batch.add_argument(
+        "--input", "-i", default="-",
+        help="JSONL input file (one JSON object per line) or - for stdin",
+    )
+    p_batch.add_argument("--output", "-o", help="Output JSONL file (default: stdout)")
+    p_batch.add_argument("--workers", "-w", type=int, default=4, help="Parallel worker threads")
+    p_batch.add_argument("--key", "-k", default="id", help="Field used as item identifier")
+    p_batch.add_argument("--no-progress", action="store_true", help="Suppress progress bar")
+    p_batch.add_argument("--no-cache", action="store_true")
+    p_batch.add_argument("--dry-run", action="store_true")
+
     # visualise / visualize
     p_vis = sub.add_parser("visualise", aliases=["visualize"], help="Generate Mermaid DAG")
     p_vis.add_argument("pipeline", help="Path to pipeline.yaml")
@@ -52,6 +66,8 @@ def main() -> None:
         _cmd_init(args)
     elif args.command == "run":
         _cmd_run(args)
+    elif args.command == "batch":
+        _cmd_batch(args)
     elif args.command == "validate":
         _cmd_validate(args)
     elif args.command == "schema":
@@ -177,6 +193,78 @@ def _cmd_run(args: Any) -> None:
     if args.output:
         Path(args.output).write_text(out_str + "\n", encoding="utf-8")
         print(f"Output written to {args.output}")
+    else:
+        print(out_str)
+
+
+def _cmd_batch(args: Any) -> None:
+    from .batch import BatchRunner
+
+    if args.input == "-":
+        raw = sys.stdin.read()
+    else:
+        raw = Path(args.input).read_text(encoding="utf-8")
+
+    items: list[dict[str, Any]] = []
+    for lineno, line in enumerate(raw.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            print(f"Error: invalid JSON on line {lineno}: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(obj, dict):
+            print(f"Error: line {lineno} is not a JSON object", file=sys.stderr)
+            sys.exit(1)
+        items.append(obj)
+
+    if not items:
+        print("Error: no items found in input", file=sys.stderr)
+        sys.exit(1)
+
+    reserved_keys = {"ok", "error", "steps"}
+    if args.key in reserved_keys:
+        print(
+            f"Error: --key '{args.key}' conflicts with reserved output fields"
+            f" ({', '.join(sorted(reserved_keys))}). Choose a different key.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    runner = BatchRunner(
+        args.pipeline,
+        max_workers=args.workers,
+        progress=not args.no_progress,
+    )
+
+    output_lines: list[str] = []
+    ok_count = 0
+    for item_id, rctx in runner.run(
+        items,
+        key=args.key,
+        use_cache=not args.no_cache,
+        dry_run=args.dry_run,
+    ):
+        record: dict[str, Any] = {}
+        record[args.key] = item_id
+        record["ok"] = not rctx.failed
+        if rctx.failed and rctx.failure_state:
+            record["error"] = str(rctx.failure_state.exception)
+        else:
+            ok_count += 1
+            record["steps"] = {
+                name: _serialise(sr.value)
+                for name, sr in rctx.steps.items()
+            }
+        output_lines.append(json.dumps(record, default=str))
+
+    out_str = "\n".join(output_lines)
+    if args.output:
+        Path(args.output).write_text(out_str + "\n", encoding="utf-8")
+        summary_fail = len(output_lines) - ok_count
+        print(f"Batch complete: {ok_count} succeeded, {summary_fail} failed → {args.output}")
     else:
         print(out_str)
 

@@ -1,40 +1,52 @@
-"""Tests for BatchRunner."""
+"""Tests for BatchRunner and BatchResult."""
 from __future__ import annotations
 
 from pathlib import Path
 
-from pyconveyor.batch import BatchRunner
+import pytest
+
+from pyconveyor.batch import BatchResult, BatchRunner
+from pyconveyor.runner import RunContext
 
 PIPELINES = Path(__file__).parent / "fixtures" / "pipelines"
 
 
 class TestBatchRunner:
-    def test_run_all_returns_list(self):
+    def test_run_all_returns_batch_result(self):
         br = BatchRunner(PIPELINES / "hello.yaml", max_workers=2)
         items = [{"name": "Ada"}, {"name": "Bob"}]
-        results = br.run_all(items)
-        assert len(results) == 2
+        result = br.run_all(items)
+        assert isinstance(result, BatchResult)
+        assert len(result) == 2
 
-    def test_results_have_item_id(self):
+    def test_batch_result_iterable(self):
         br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1)
         items = [{"name": "Ada", "id": "ada-001"}]
-        results = br.run_all(items)
-        assert len(results) == 1
-        item_id, rctx = results[0]
+        result = br.run_all(items)
+        pairs = list(result)
+        assert len(pairs) == 1
+        item_id, rctx = pairs[0]
+        assert item_id == "ada-001"
+
+    def test_batch_result_indexing(self):
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1)
+        items = [{"name": "Ada", "id": "ada-001"}]
+        result = br.run_all(items)
+        item_id, rctx = result[0]
         assert item_id == "ada-001"
 
     def test_results_not_failed(self):
         br = BatchRunner(PIPELINES / "hello.yaml", max_workers=2)
         items = [{"name": "Ada"}, {"name": "Bob"}]
-        results = br.run_all(items)
-        for _, rctx in results:
+        result = br.run_all(items)
+        for _, rctx in result:
             assert not rctx.failed
 
     def test_step_results_correct(self):
         br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1)
         items = [{"name": "Ada"}]
-        results = br.run_all(items)
-        _, rctx = results[0]
+        result = br.run_all(items)
+        _, rctx = result[0]
         assert "greet" in rctx.steps
         assert rctx.steps["greet"].status == "success"
 
@@ -47,7 +59,119 @@ class TestBatchRunner:
     def test_custom_key_fn(self):
         br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1)
         items = [{"name": "Ada", "doc_id": "ada"}, {"name": "Bob", "doc_id": "bob"}]
-        results = br.run_all(items, key="doc_id")
-        ids = [r[0] for r in results]
-        # IDs should be the doc_id values
+        result = br.run_all(items, key="doc_id")
+        ids = [r[0] for r in result]
         assert set(ids) == {"ada", "bob"}
+
+    def test_empty_items_returns_empty_result(self):
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1)
+        result = br.run_all([])
+        assert isinstance(result, BatchResult)
+        assert len(result) == 0
+
+    def test_on_batch_item_end_hook_called(self):
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1, progress=False)
+        items = [{"name": "Ada", "id": "ada"}, {"name": "Bob", "id": "bob"}]
+        seen: list[tuple] = []
+
+        @br.on_batch_item_end
+        def capture(item_id, rctx):
+            seen.append((item_id, rctx.failed))
+
+        br.run_all(items)
+        assert len(seen) == 2
+        assert all(not failed for _, failed in seen)
+
+    def test_on_batch_item_end_called_per_item(self):
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1, progress=False)
+        items = [{"name": f"User{i}", "id": i} for i in range(5)]
+        call_count = [0]
+
+        @br.on_batch_item_end
+        def counter(item_id, rctx):
+            call_count[0] += 1
+
+        br.run_all(items)
+        assert call_count[0] == 5
+
+    def test_hook_error_does_not_abort_batch(self):
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1, progress=False)
+        items = [{"name": "Ada", "id": "ada"}]
+
+        @br.on_batch_item_end
+        def bad_hook(item_id, rctx):
+            raise RuntimeError("hook failure")
+
+        result = br.run_all(items)
+        assert len(result) == 1
+
+    def test_missing_key_falls_back_to_id_builtin(self):
+        # Regression: item missing the key field → id(item) used, run still completes
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1, progress=False)
+        items = [{"name": "Ada"}]  # no "id" field
+        result = br.run_all(items, key="id")
+        assert len(result) == 1
+        item_id, rctx = list(result)[0]
+        assert isinstance(item_id, int)  # id(item) returns an int
+        assert not rctx.failed
+
+    def test_worker_exception_creates_failed_rctx(self):
+        # Regression: if runner.run() itself raises unexpectedly, batch wraps it
+        from unittest.mock import patch
+
+        from pyconveyor.runner import PipelineRunner
+        br = BatchRunner(PIPELINES / "hello.yaml", max_workers=1, progress=False)
+        items = [{"name": "Ada", "id": "boom"}]
+        with patch.object(PipelineRunner, "run", side_effect=RuntimeError("boom")):
+            result = br.run_all(items)
+        assert len(result) == 1
+        item_id, rctx = list(result)[0]
+        assert item_id == "boom"
+        assert rctx.failed
+        assert "boom" in str(rctx.failure_state.exception)
+
+
+class TestBatchResult:
+    def _make(self, n_success: int = 2, n_fail: int = 1) -> BatchResult:
+        items: list[tuple] = []
+        for i in range(n_success):
+            rctx = RunContext({})
+            items.append((f"ok-{i}", rctx))
+        for i in range(n_fail):
+            rctx = RunContext({})
+            rctx.failed = True
+            items.append((f"fail-{i}", rctx))
+        return BatchResult(items)
+
+    def test_successes_filtered(self):
+        br = self._make(n_success=3, n_fail=1)
+        assert len(br.successes) == 3
+
+    def test_failures_filtered(self):
+        br = self._make(n_success=2, n_fail=2)
+        assert len(br.failures) == 2
+
+    def test_error_rate(self):
+        br = self._make(n_success=3, n_fail=1)
+        assert br.error_rate == pytest.approx(0.25)
+
+    def test_error_rate_empty(self):
+        br = BatchResult([])
+        assert br.error_rate == 0.0
+
+    def test_summary_counts(self):
+        br = self._make(n_success=4, n_fail=1)
+        s = br.summary()
+        assert s.total == 5
+        assert s.succeeded == 4
+        assert s.failed == 1
+
+    def test_summary_failed_ids(self):
+        br = self._make(n_success=1, n_fail=2)
+        s = br.summary()
+        assert set(s.failed_ids) == {"fail-0", "fail-1"}
+
+    def test_all_success_zero_error_rate(self):
+        br = self._make(n_success=5, n_fail=0)
+        assert br.error_rate == 0.0
+        assert br.summary().failed == 0

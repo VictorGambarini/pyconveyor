@@ -310,3 +310,100 @@ class TestRunContextProxy:
         from pyconveyor.runner import StepResult
         rctx._step_results["s"] = StepResult(name="s", value=None, status="success")
         assert rctx.steps["s"].nonexistent_attr is None
+
+
+# ── Lifecycle hooks ────────────────────────────────────────────────────────────
+
+class TestLifecycleHooks:
+    def test_on_run_start_called(self):
+        seen: list[dict] = []
+        runner = _runner("hello.yaml")
+        runner.on_run_start(lambda data: seen.append(data))
+        runner.run({"name": "Ada"})
+        assert seen == [{"name": "Ada"}]
+
+    def test_on_run_end_called(self):
+        seen = []
+        runner = _runner("hello.yaml")
+        runner.on_run_end(lambda rctx: seen.append(rctx.failed))
+        runner.run({"name": "Ada"})
+        assert seen == [False]
+
+    def test_on_run_start_hook_error_does_not_abort(self):
+        runner = _runner("hello.yaml")
+        runner.on_run_start(lambda data: (_ for _ in ()).throw(RuntimeError("hook error")))
+        rctx = runner.run({"name": "Ada"})
+        assert not rctx.failed
+
+    def test_on_run_end_hook_error_does_not_abort(self):
+        runner = _runner("hello.yaml")
+        runner.on_run_end(lambda rctx: (_ for _ in ()).throw(RuntimeError("end hook error")))
+        rctx = runner.run({"name": "Ada"})
+        assert not rctx.failed
+
+    def test_multiple_run_start_hooks(self):
+        calls: list[str] = []
+        runner = _runner("hello.yaml")
+        runner.on_run_start(lambda d: calls.append("first"))
+        runner.on_run_start(lambda d: calls.append("second"))
+        runner.run({"name": "Ada"})
+        assert calls == ["first", "second"]
+
+    def test_multiple_run_end_hooks(self):
+        calls: list[str] = []
+        runner = _runner("hello.yaml")
+        runner.on_run_end(lambda r: calls.append("first"))
+        runner.on_run_end(lambda r: calls.append("second"))
+        runner.run({"name": "Ada"})
+        assert calls == ["first", "second"]
+
+    def test_on_run_start_decorator_returns_fn(self):
+        runner = _runner("hello.yaml")
+
+        @runner.on_run_start
+        def my_hook(data: dict) -> None:
+            pass
+
+        assert my_hook is not None
+
+    def test_on_run_end_decorator_returns_fn(self):
+        runner = _runner("hello.yaml")
+
+        @runner.on_run_end
+        def my_hook(rctx: RunContext) -> None:
+            pass
+
+        assert my_hook is not None
+
+    def test_on_llm_call_fired_per_attempt(self):
+        calls: list[tuple] = []
+        runner = _runner("hello.yaml")
+        runner.on_llm_call(lambda step, model, response: calls.append((step, model, response)))
+        runner.run({"name": "Ada"})
+        assert len(calls) == 1
+        step_name, model, response = calls[0]
+        assert step_name == "greet"
+        assert isinstance(response, str)
+
+    def test_on_llm_call_hook_error_does_not_abort(self):
+        runner = _runner("hello.yaml")
+        runner.on_llm_call(lambda s, m, r: (_ for _ in ()).throw(RuntimeError("llm hook error")))
+        rctx = runner.run({"name": "Ada"})
+        assert not rctx.failed
+
+    def test_on_run_end_called_when_pipeline_fails(self):
+        # Regression: on_run_end must fire even when pipeline aborts
+        seen = []
+        runner = _runner("hello.yaml")
+        runner.on_run_end(lambda rctx: seen.append(rctx.failed))
+        from unittest.mock import patch
+        with patch("pyconveyor.runner.execute_llm_step", side_effect=RuntimeError("forced")):
+            rctx = runner.run({"name": "Ada"})
+        assert rctx.failed
+        assert seen == [True]  # on_run_end fired with the failed rctx
+
+    def test_on_step_end_hook_error_does_not_abort(self):
+        runner = _runner("hello.yaml")
+        runner.on_step_end(lambda name, val, rctx: (_ for _ in ()).throw(RuntimeError("step hook error")))
+        rctx = runner.run({"name": "Ada"})
+        assert not rctx.failed
