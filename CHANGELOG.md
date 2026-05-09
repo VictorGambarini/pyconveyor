@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`) — ruff, mypy, pytest on Python 3.10–3.14 matrix
+- GitHub Actions publish workflow (`.github/workflows/publish.yml`) — tag-triggered PyPI publish via OIDC Trusted Publisher + GitHub Release creation
+- MkDocs + Material theme docs site (`docs/`) — 11 pages covering quickstart, all step types, expressions, providers, CLI reference, and examples
+- `.readthedocs.yaml` v2 config targeting Read the Docs at `https://pyconveyor.readthedocs.io`
+- Python 3.13 and 3.14 trove classifiers in `pyproject.toml`
+
+---
+
 ## [0.1.0] — 2026-05-09
 
 ### Added
