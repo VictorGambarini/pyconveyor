@@ -692,3 +692,180 @@ class TestVocabCliReview:
 
         captured = capsys.readouterr()
         assert "No pending" in captured.out
+
+
+class TestVocabAdditionalCoverage:
+    def test_inject_vocab_prompt_false_suppresses_suffix(self, tmp_path):
+        """When inject_vocab_prompt: false, the vocab suffix is NOT appended."""
+        from pydantic import BaseModel
+
+        from pyconveyor import PipelineRunner
+        from pyconveyor.vocab import VocabField, Vocabulary
+
+        vocab = Vocabulary(known={"PET", "PE"}, label="plastic_type")
+        captured_messages: list = []
+
+        class NoInjectRecord(BaseModel):
+            plastic: str = VocabField(vocab=vocab)
+            quantity: int
+
+        import sys
+        sys.modules["_test_noinj_schema"] = type(sys)("_test_noinj_schema")
+        sys.modules["_test_noinj_schema"].NoInjectRecord = NoInjectRecord  # type: ignore[attr-defined]
+
+        pipeline = tmp_path / "noinj.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"PET\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    inject_vocab_prompt: false\n"
+            "    prompt_string: 'Extract plastic type.'\n"
+            "    schema: _test_noinj_schema:NoInjectRecord\n"
+            "    max_attempts: 1\n"
+        )
+
+        def fake_call_llm(client, messages, model, **kwargs):
+            captured_messages.extend(messages)
+            return '{"plastic": "PET", "quantity": 1}', None
+
+        with patch("pyconveyor.steps.llm_step.call_llm", side_effect=fake_call_llm):
+            runner = PipelineRunner(pipeline)
+            runner.run({})
+
+        prompt_text = " ".join(m.get("content", "") for m in captured_messages)
+        assert "Vocabulary constraint" not in prompt_text
+
+    def test_persist_true_uses_default_path(self, tmp_path):
+        """persist=True saves to vocabularies/{label}.yaml relative to pipeline dir."""
+        from pydantic import BaseModel
+
+        from pyconveyor import PipelineRunner
+        from pyconveyor.vocab import VocabField, Vocabulary
+
+        vocab = Vocabulary(
+            known={"PET"}, label="plastic_type",
+            growth_policy="auto",
+            persist=True,
+        )
+
+        class PersistTrueRecord(BaseModel):
+            plastic: str = VocabField(vocab=vocab)
+            quantity: int
+
+        import sys
+        sys.modules["_test_persist_true_schema"] = type(sys)("_test_persist_true_schema")
+        sys.modules["_test_persist_true_schema"].PersistTrueRecord = PersistTrueRecord  # type: ignore[attr-defined]
+
+        pipeline = tmp_path / "persist_true.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"HDPE\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema: _test_persist_true_schema:PersistTrueRecord\n"
+            "    max_attempts: 1\n"
+        )
+        runner = PipelineRunner(pipeline)
+        runner.run({})
+        default_path = tmp_path / "vocabularies" / "plastic_type.yaml"
+        assert default_path.exists()
+
+    def test_llm_growth_policy_accepts_term(self, tmp_path):
+        """growth_policy='llm' calls _llm_growth_decision; accepted terms added to known."""
+        from pydantic import BaseModel
+
+        from pyconveyor import PipelineRunner
+        from pyconveyor.vocab import VocabField, Vocabulary
+
+        vocab = Vocabulary(
+            known={"PET"}, label="plastic_type",
+            growth_policy="llm",
+        )
+
+        class LlmPolicyRecord(BaseModel):
+            plastic: str = VocabField(vocab=vocab)
+            quantity: int
+
+        import sys
+        sys.modules["_test_llmpol_schema"] = type(sys)("_test_llmpol_schema")
+        sys.modules["_test_llmpol_schema"].LlmPolicyRecord = LlmPolicyRecord  # type: ignore[attr-defined]
+
+        pipeline = tmp_path / "llmpol.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"HDPE\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema: _test_llmpol_schema:LlmPolicyRecord\n"
+            "    max_attempts: 1\n"
+        )
+
+        runner = PipelineRunner(pipeline)
+        with patch.object(runner, "_llm_growth_decision", return_value=True):
+            runner.run({})
+
+        assert "HDPE" in vocab.known
+
+    def test_llm_growth_policy_rejects_term(self, tmp_path):
+        """growth_policy='llm' calls _llm_growth_decision; rejected terms not added."""
+        from pydantic import BaseModel
+
+        from pyconveyor import PipelineRunner
+        from pyconveyor.vocab import VocabField, Vocabulary
+
+        vocab = Vocabulary(
+            known={"PET"}, label="plastic_type",
+            growth_policy="llm",
+        )
+
+        class LlmPolRejectRecord(BaseModel):
+            plastic: str = VocabField(vocab=vocab)
+            quantity: int
+
+        import sys
+        sys.modules["_test_llmpolrej_schema"] = type(sys)("_test_llmpolrej_schema")
+        sys.modules["_test_llmpolrej_schema"].LlmPolRejectRecord = LlmPolRejectRecord  # type: ignore[attr-defined]
+
+        pipeline = tmp_path / "llmpolrej.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"HDPE\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema: _test_llmpolrej_schema:LlmPolRejectRecord\n"
+            "    max_attempts: 1\n"
+        )
+
+        runner = PipelineRunner(pipeline)
+        with patch.object(runner, "_llm_growth_decision", return_value=False):
+            runner.run({})
+
+        assert "HDPE" not in vocab.known
