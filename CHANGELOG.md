@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] — 2026-05-10
+
+### Changed
+
+- README rewritten with full feature overview, examples, CLI reference, and documentation links
+
+---
+
 ## [1.0.0] — 2026-05-10
 
 ### Added
@@ -107,4 +115,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ISSUE-003**: `pyconveyor validate` / `pyconveyor run` now insert the pipeline directory into `sys.path` so local schema modules are importable without installation.
 - **ISSUE-004**: `pyconveyor run --input` now accepts an inline JSON string starting with `{` or `[`, eliminating the spurious `FileNotFoundError` on inline JSON input.
 
+[1.0.1]: https://github.com/VictorGambarini/pyconveyor/releases/tag/v1.0.1
 [0.1.0]: https://github.com/VictorGambarini/pyconveyor/releases/tag/v0.1.0
