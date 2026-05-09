@@ -60,6 +60,18 @@ def main() -> None:
     p_vis.add_argument("pipeline", help="Path to pipeline.yaml")
     p_vis.add_argument("--output", "-o", help="Output file (default: stdout)")
 
+    # vocab
+    p_vocab = sub.add_parser("vocab", help="Vocabulary management commands")
+    vocab_sub = p_vocab.add_subparsers(dest="vocab_command", required=True)
+    p_vocab_review = vocab_sub.add_parser(
+        "review", help="Review pending vocabulary suggestions"
+    )
+    p_vocab_review.add_argument("pipeline", help="Path to pipeline.yaml")
+    p_vocab_review.add_argument(
+        "--auto-accept", action="store_true",
+        help="Accept all pending suggestions without prompting"
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -74,6 +86,9 @@ def main() -> None:
         _cmd_schema(args)
     elif args.command in ("visualise", "visualize"):
         _cmd_visualise(args)
+    elif args.command == "vocab":
+        if args.vocab_command == "review":
+            _cmd_vocab_review(args)
 
 
 # ── init ───────────────────────────────────────────────────────────────────────
@@ -86,6 +101,7 @@ def _cmd_init(args: Any) -> None:
     _write_template(target / "prompts" / "extract.j2", _PROMPT_TMPL)
     _write_template(target / "schemas.py", _SCHEMAS_TMPL)
     _write_template(target / "steps.py", _STEPS_TMPL)
+    (target / "vocabularies").mkdir(exist_ok=True)
 
     # .vscode/settings.json
     schema_path = target / "pyconveyor-schema.json"
@@ -318,6 +334,137 @@ def _cmd_visualise(args: Any) -> None:
         print(f"Diagram written to {args.output}")
     else:
         print(md)
+
+
+# ── vocab review ──────────────────────────────────────────────────────────────
+
+def _cmd_vocab_review(args: Any) -> None:
+    """Interactive review of pending vocabulary suggestions."""
+    import yaml
+
+    from .vocab import Vocabulary
+
+    pipeline_path = Path(args.pipeline).resolve()
+    pipeline_dir = pipeline_path.parent
+
+    try:
+        with pipeline_path.open(encoding="utf-8") as f:
+            spec = yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"Error reading pipeline: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    vocab_block = spec.get("vocabularies", {})
+    if not vocab_block:
+        print("No vocabularies declared in this pipeline.")
+        return
+
+    # Load all vocab files
+    vocabs: dict[str, tuple[Vocabulary, Path]] = {}
+    for label, value in vocab_block.items():
+        if isinstance(value, str):
+            vocab_path = pipeline_dir / value
+            if not vocab_path.exists():
+                print(f"  Vocab file not found: {vocab_path} — skipping", file=sys.stderr)
+                continue
+            vocab = Vocabulary.from_file(vocab_path)
+            vocabs[label] = (vocab, vocab_path)
+        elif isinstance(value, dict):
+            persist = value.get("persist")
+            if persist and isinstance(persist, str):
+                vocab_path = pipeline_dir / persist
+            elif persist is True:
+                vocab_path = pipeline_dir / "vocabularies" / f"{label}.yaml"
+            else:
+                print(f"  Vocab '{label}' has no persist path — skipping")
+                continue
+            if not vocab_path.exists():
+                print(f"  No pending suggestions file for '{label}' — skipping")
+                continue
+            vocab = Vocabulary.from_file(vocab_path)
+            vocabs[label] = (vocab, vocab_path)
+
+    if not vocabs:
+        print("No vocabulary files found to review.")
+        return
+
+    any_pending = False
+    for label, (vocab, vocab_path) in vocabs.items():
+        if not vocab.pending:
+            continue
+        any_pending = True
+
+        print(f"\nVocabulary: {vocab.label}")
+        if vocab.description:
+            print(f"Description: {vocab.description}")
+        print(f"Known terms: {', '.join(sorted(vocab.known))}")
+        if vocab.denied:
+            print(f"Denied terms: {', '.join(sorted(vocab.denied))}")
+        print(f"\nPending suggestions ({len(vocab.pending)}):")
+        for i, entry in enumerate(vocab.pending, 1):
+            raw = entry.get("raw_value", "?")
+            seen = entry.get("seen", 1)
+            match_type = entry.get("match_type", "novel")
+            ideal = entry.get("ideal_value")
+            ideal_str = f" (ideal: '{ideal}')" if ideal else ""
+            matched = entry.get("matched_to")
+            matched_str = f" → fuzzy match for '{matched}'" if matched else ""
+            print(f"  {i}. '{raw}'{ideal_str} — {match_type}{matched_str} (seen {seen}×)")
+
+        if args.auto_accept:
+            for entry in vocab.pending:
+                vocab.add_term(entry["raw_value"])
+            print(f"\n→ Auto-accepted all {len(vocab.pending)} terms into '{label}'.")
+            vocab.pending.clear()
+            vocab.save(vocab_path)
+            continue
+
+        print("\nEnter numbers to accept (comma-separated), 'd<numbers>' to deny, or Enter to skip.")
+        print("Example: '1,3' to accept; 'd2' to deny #2; '1,3 d2' for both.")
+        try:
+            response = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            return
+
+        if not response:
+            continue
+
+        accept_indices: set[int] = set()
+        deny_indices: set[int] = set()
+
+        for token in response.replace(",", " ").split():
+            if token.startswith("d") or token.startswith("D"):
+                nums = token[1:].split(",") if "," in token[1:] else [token[1:]]
+                for n in nums:
+                    try:
+                        deny_indices.add(int(n.strip()) - 1)
+                    except ValueError:
+                        pass
+            else:
+                try:
+                    accept_indices.add(int(token.strip()) - 1)
+                except ValueError:
+                    pass
+
+        kept_pending: list[dict[str, Any]] = []
+        for i, entry in enumerate(vocab.pending):
+            raw = entry["raw_value"]
+            if i in accept_indices:
+                vocab.add_term(raw)
+                print(f"  ✓ Added '{raw}' to {label}")
+            elif i in deny_indices:
+                vocab.denied.add(raw)
+                print(f"  ✗ Denied '{raw}' in {label}")
+            else:
+                kept_pending.append(entry)
+
+        vocab.pending = kept_pending
+        vocab.save(vocab_path)
+        print(f"  Saved {vocab_path}")
+
+    if not any_pending:
+        print("No pending suggestions found across all vocabularies.")
 
 
 # ── JSONSchema for pipeline YAML ──────────────────────────────────────────────

@@ -139,6 +139,7 @@ def execute_llm_step(
     use_cache: bool = True,
     refresh_cache: bool = False,
     dry_run: bool = False,
+    vocabularies: dict[str, Any] | None = None,
 ) -> tuple[Any, list[AttemptLog]]:
     """Execute one LLM step and return ``(result, attempt_logs)``.
 
@@ -175,6 +176,14 @@ def execute_llm_step(
     # Merge resolved inputs into template context
     template_ctx = dict(resolved_inputs)
 
+    # Build vocab_hints for manual placement in templates
+    _vocabs = _resolve_step_vocabs(schema_cls, vocabularies or {})
+    if _vocabs:
+        from ..vocab import build_vocab_hints
+        template_ctx.setdefault("vocab_hints", build_vocab_hints(_vocabs))
+    else:
+        template_ctx.setdefault("vocab_hints", "")
+
     if dry_run:
         log = AttemptLog(step=name, attempt=1, status="success", raw_output="[dry-run]")
         return None, [log]
@@ -197,6 +206,14 @@ def execute_llm_step(
             Path(full_system).name,
             **template_ctx,
         )
+
+    # Auto-append vocab suffix unless step opts out or template used vocab_hints
+    inject_vocab: bool = step.get("inject_vocab_prompt", True)
+    if inject_vocab and _vocabs and "{{ vocab_hints }}" not in (prompt_path or ""):
+        from ..vocab import build_vocab_hints
+        suffix = build_vocab_hints(_vocabs)
+        if suffix and suffix not in rendered_prompt:
+            rendered_prompt = rendered_prompt.rstrip() + "\n\n" + suffix
 
     # max_prompt_tokens guard
     max_prompt_tokens: int | None = step.get("max_prompt_tokens")
@@ -310,7 +327,7 @@ def execute_llm_step(
         # ── Schema validation ──────────────────────────────────────────────────
         if schema_cls is not None:
             if isinstance(parsed, dict):
-                parsed = _apply_vocab_fields(parsed, schema_cls, rctx, name)
+                parsed = _apply_vocab_fields(parsed, schema_cls, rctx, name, vocabularies or {})
             try:
                 result = schema_cls(**parsed) if isinstance(parsed, dict) else schema_cls.model_validate(parsed)
                 log.elapsed_seconds = time.monotonic() - t0
@@ -412,45 +429,89 @@ def _do_call_with_usage(
     )
 
 
+def _resolve_step_vocabs(
+    schema_cls: Any,
+    vocabularies: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a label→Vocabulary mapping for all VocabFields in *schema_cls*."""
+    from ..vocab import Vocabulary
+
+    if schema_cls is None:
+        return {}
+    try:
+        model_fields = schema_cls.model_fields
+    except AttributeError:
+        return {}
+
+    result: dict[str, Any] = {}
+    for field_info in model_fields.values():
+        extra = getattr(field_info, "json_schema_extra", None) or {}
+        vocab = extra.get("_pyconveyor_vocab")
+        ref = extra.get("_pyconveyor_vocab_ref")
+        if vocab is not None and isinstance(vocab, Vocabulary):
+            result[vocab.label] = vocab
+        elif ref is not None and ref in vocabularies:
+            v = vocabularies[ref]
+            result[v.label if isinstance(v, Vocabulary) else ref] = v
+    return result
+
+
 def _apply_vocab_fields(
     parsed: dict[str, Any],
     schema_cls: Any,
     rctx: RunContext,
     step_name: str,
+    vocabularies: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pre-process *parsed* dict by applying VocabField normalisation.
 
     Looks for fields whose ``json_schema_extra`` contains ``_pyconveyor_vocab``
-    and normalises the raw value before Pydantic validation runs.  Suggestions
-    (novel / fuzzy matches) are recorded on *rctx*.
+    (or ``_pyconveyor_vocab_ref``) and normalises the raw value before Pydantic
+    validation runs. Also extracts ``{field}_ideal`` values when ``capture_ideal``
+    is True. Suggestions (novel / fuzzy matches) are recorded on *rctx*.
     """
+    from ..vocab import Vocabulary, apply_vocab
+
     try:
         model_fields = schema_cls.model_fields
     except AttributeError:
         return parsed
 
-    from ..vocab import apply_vocab
-
+    resolved_vocabs = vocabularies or {}
     result = dict(parsed)
+
     for field_name, field_info in model_fields.items():
         extra = getattr(field_info, "json_schema_extra", None) or {}
-        vocab = extra.get("_pyconveyor_vocab")
+
+        vocab: Vocabulary | None = extra.get("_pyconveyor_vocab")
+        ref: str | None = extra.get("_pyconveyor_vocab_ref")
+        if vocab is None and ref is not None:
+            candidate = resolved_vocabs.get(ref)
+            if isinstance(candidate, Vocabulary):
+                vocab = candidate
+
         if vocab is None or field_name not in result:
             continue
+
         raw_value = result[field_name]
         if not isinstance(raw_value, str):
             continue
-        stored, novel, matched, suggestion = apply_vocab(raw_value, vocab, field_name)
+
+        # Extract ideal value if present in parsed dict
+        capture_ideal: bool = extra.get("_pyconveyor_capture_ideal", False) or vocab.capture_ideal
+        ideal_key = f"{field_name}_ideal"
+        ideal_value: str | None = result.pop(ideal_key, None) if capture_ideal else None
+
+        stored, novel, matched, suggestion = apply_vocab(
+            raw_value, vocab, field_name, ideal_value=ideal_value
+        )
         result[field_name] = stored
+
         if suggestion is not None:
             rctx._vocab_suggestions.append(suggestion)
             logger.debug(
                 "Step '%s': vocab field '%s' raw=%r → %r (%s)",
-                step_name,
-                field_name,
-                raw_value,
-                stored,
-                suggestion.match_type,
+                step_name, field_name, raw_value, stored, suggestion.match_type,
             )
     return result
 

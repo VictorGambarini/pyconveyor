@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyconveyor"
-version = "0.2.0"
+version = "1.0.0"
 description = "Deterministic YAML pipeline engine for structured LLM extraction"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -19,7 +19,7 @@ keywords = [
     "deterministic",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
