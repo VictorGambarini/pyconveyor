@@ -1,0 +1,15 @@
+# Pipeline for testing VocabField integration.
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"plastic": "pet", "quantity": 5}'
+
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt_string: "Extract the plastic type and quantity."
+    schema: tests.fixtures.schemas:PlasticRecord
+    max_attempts: 1

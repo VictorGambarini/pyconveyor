@@ -309,6 +309,8 @@ def execute_llm_step(
 
         # ── Schema validation ──────────────────────────────────────────────────
         if schema_cls is not None:
+            if isinstance(parsed, dict):
+                parsed = _apply_vocab_fields(parsed, schema_cls, rctx, name)
             try:
                 result = schema_cls(**parsed) if isinstance(parsed, dict) else schema_cls.model_validate(parsed)
                 log.elapsed_seconds = time.monotonic() - t0
@@ -408,6 +410,49 @@ def _do_call_with_usage(
         temperature=temperature, top_p=top_p, max_tokens=max_tokens, seed=seed,
         extra_params=extra_params, max_retries=max_retries, retry_delay=retry_delay,
     )
+
+
+def _apply_vocab_fields(
+    parsed: dict[str, Any],
+    schema_cls: Any,
+    rctx: RunContext,
+    step_name: str,
+) -> dict[str, Any]:
+    """Pre-process *parsed* dict by applying VocabField normalisation.
+
+    Looks for fields whose ``json_schema_extra`` contains ``_pyconveyor_vocab``
+    and normalises the raw value before Pydantic validation runs.  Suggestions
+    (novel / fuzzy matches) are recorded on *rctx*.
+    """
+    try:
+        model_fields = schema_cls.model_fields
+    except AttributeError:
+        return parsed
+
+    from ..vocab import apply_vocab
+
+    result = dict(parsed)
+    for field_name, field_info in model_fields.items():
+        extra = getattr(field_info, "json_schema_extra", None) or {}
+        vocab = extra.get("_pyconveyor_vocab")
+        if vocab is None or field_name not in result:
+            continue
+        raw_value = result[field_name]
+        if not isinstance(raw_value, str):
+            continue
+        stored, novel, matched, suggestion = apply_vocab(raw_value, vocab, field_name)
+        result[field_name] = stored
+        if suggestion is not None:
+            rctx._vocab_suggestions.append(suggestion)
+            logger.debug(
+                "Step '%s': vocab field '%s' raw=%r → %r (%s)",
+                step_name,
+                field_name,
+                raw_value,
+                stored,
+                suggestion.match_type,
+            )
+    return result
 
 
 def _pydantic_errors(exc: Exception) -> list[ErrorInfo]:

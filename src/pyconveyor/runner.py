@@ -219,11 +219,29 @@ class PipelineRunner:
         self._clients: dict[str, Any] = {}  # model_name → client (lazy init)
         self._caches: dict[str, ResponseCache | None] = {}
         self._hooks: dict[str, list[Callable[..., Any]]] = {
+            "on_run_start": [],
+            "on_run_end": [],
             "on_step_end": [],
             "on_llm_call": [],
         }
 
     # ── Hooks ──────────────────────────────────────────────────────────────────
+
+    def on_run_start(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Register a callback called before any steps execute.
+
+        Signature: ``fn(input_data: dict) -> None``
+        """
+        self._hooks["on_run_start"].append(fn)
+        return fn
+
+    def on_run_end(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Register a callback called after the run completes (success or failure).
+
+        Signature: ``fn(rctx: RunContext) -> None``
+        """
+        self._hooks["on_run_end"].append(fn)
+        return fn
 
     def on_step_end(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """Register a callback called after each step completes.
@@ -269,6 +287,12 @@ class PipelineRunner:
         rctx = RunContext(input_data)
         effective_models = self._effective_models(model_overrides)
 
+        for hook in self._hooks["on_run_start"]:
+            try:
+                hook(input_data)
+            except Exception as he:
+                logger.warning("on_run_start hook error: %s", he)
+
         try:
             self._run_steps(
                 self._spec.get("steps", []),
@@ -282,6 +306,12 @@ class PipelineRunner:
             rctx.failed = True
             rctx.failure_state = FailureState(e.step_name, e.cause)
             logger.error("Pipeline aborted: %s", e)
+
+        for hook in self._hooks["on_run_end"]:
+            try:
+                hook(rctx)
+            except Exception as he:
+                logger.warning("on_run_end hook error: %s", he)
 
         return rctx
 

@@ -10,10 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.0] — 2026-05-09
 
 ### Added
 
+- `pyconveyor batch` CLI subcommand — process a JSONL file through a pipeline with configurable parallelism; outputs JSONL results
+- `BatchResult` — rich result wrapper returned by `BatchRunner.run_all()`, with `.successes`, `.failures`, `.error_rate`, and `.summary()` properties; fully backward-compatible via `__iter__` and `__getitem__`
+- `BatchSummary` dataclass — aggregate statistics (`total`, `succeeded`, `failed`, `error_rate`, `failed_ids`)
+- `BatchRunner.on_batch_item_end` hook — callback fired after each item completes, useful for streaming results to a database without waiting for the full batch
+- `PipelineRunner.on_run_start` hook — callback fired before any steps execute; `fn(input_data: dict) -> None`
+- `PipelineRunner.on_run_end` hook — callback fired after the run completes (success or failure); `fn(rctx: RunContext) -> None`
+- `VocabField` pipeline integration — the LLM step now automatically applies vocabulary normalisation (from `json_schema_extra["_pyconveyor_vocab"]`) to Pydantic model fields before validation; novel and fuzzy-matched terms are recorded in `rctx._vocab_suggestions` and surfaced in `RunSummary.vocab_suggestions`
 - GitHub Actions CI workflow (`.github/workflows/ci.yml`) — ruff, mypy, pytest on Python 3.10–3.14 matrix
 - GitHub Actions publish workflow (`.github/workflows/publish.yml`) — tag-triggered PyPI publish via OIDC Trusted Publisher + GitHub Release creation
 - MkDocs + Material theme docs site (`docs/`) — 11 pages covering quickstart, all step types, expressions, providers, CLI reference, and examples
