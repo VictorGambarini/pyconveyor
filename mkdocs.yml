@@ -56,6 +56,7 @@ nav:
     - Batch Processing: guides/batch.md
     - Hooks: guides/hooks.md
     - Vocabulary Fields: guides/vocab.md
+    - Response Caching: guides/caching.md
     - Providers: guides/providers.md
     - LLM Utilities: guides/llm-utilities.md
     - Editor Setup: guides/editor-setup.md

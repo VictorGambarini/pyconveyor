@@ -142,6 +142,7 @@ class RunContext:
         self._cache_misses: int = 0
         self._validation_warnings: list[dict[str, Any]] = []
         self._vocab_suggestions: list[Any] = []
+        self._vocabularies: dict[str, Any] = {}
         self._llm_calls: int = 0
         self._total_input_tokens: int = 0
         self._total_output_tokens: int = 0
@@ -224,6 +225,7 @@ class PipelineRunner:
             "on_step_end": [],
             "on_llm_call": [],
         }
+        self._vocabularies: dict[str, Any] = self._load_vocabularies()
 
     # ── Hooks ──────────────────────────────────────────────────────────────────
 
@@ -285,6 +287,7 @@ class PipelineRunner:
             ``RunContext`` with ``failed``, ``failure_state``, and ``steps``.
         """
         rctx = RunContext(input_data)
+        rctx._vocabularies = dict(self._vocabularies)
         effective_models = self._effective_models(model_overrides)
 
         for hook in self._hooks["on_run_start"]:
@@ -306,6 +309,8 @@ class PipelineRunner:
             rctx.failed = True
             rctx.failure_state = FailureState(e.step_name, e.cause)
             logger.error("Pipeline aborted: %s", e)
+
+        self._apply_growth_policies(rctx, effective_models)
 
         for hook in self._hooks["on_run_end"]:
             try:
@@ -429,12 +434,8 @@ class PipelineRunner:
                 "ctx": rctx._input,
                 "steps": {n: sr.value for n, sr in rctx._step_results.items()},
             })
-            if self._spec.get("vocabularies"):
-                from .vocab import Vocabulary
-                resolved["vocab"] = {
-                    k: v if isinstance(v, Vocabulary) else Vocabulary.from_dict(v)
-                    for k, v in self._spec["vocabularies"].items()
-                }
+            if self._vocabularies:
+                resolved["vocab"] = self._vocabularies
 
             result, logs = execute_llm_step(
                 step=step,
@@ -447,6 +448,7 @@ class PipelineRunner:
                 use_cache=use_cache,
                 refresh_cache=refresh_cache,
                 dry_run=dry_run,
+                vocabularies=self._vocabularies,
             )
             return result, logs
 
@@ -473,6 +475,20 @@ class PipelineRunner:
                     refresh_cache=kw.get("refresh_cache", False),
                     dry_run=kw.get("dry_run", False),
                 )
+                # Fire on_llm_call hooks for parallel children
+                child_type = child.get("type", "llm")
+                if child_type == "llm" or (child_type is None and "prompt" in child):
+                    child_model_ref = child.get("model", "")
+                    child_model_id = effective_models.get(child_model_ref, {}).get("model", child_model_ref)
+                    for al in logs:
+                        if al.tokens:
+                            rctx_shared._total_input_tokens += al.tokens.get("prompt_tokens", 0)
+                            rctx_shared._total_output_tokens += al.tokens.get("completion_tokens", 0)
+                        for hook in self._hooks["on_llm_call"]:
+                            try:
+                                hook(child["name"], child_model_id, al.raw_output)
+                            except Exception as he:
+                                logger.warning("on_llm_call hook error (parallel): %s", he)
                 # Store child in rctx so expressions can reference them
                 rctx_shared._step_results[child["name"]] = StepResult(
                     name=child["name"], value=val, status="success", attempts=logs
@@ -522,6 +538,144 @@ class PipelineRunner:
                 file=str(self._path),
                 key_path=f"steps[{name}].type",
             )
+
+    # ── Vocabulary helpers ─────────────────────────────────────────────────────
+
+    def _load_vocabularies(self) -> dict[str, Any]:
+        """Load vocabulary objects declared in ``vocabularies:`` block."""
+        from .vocab import Vocabulary
+
+        raw = self._spec.get("vocabularies", {})
+        if not raw:
+            return {}
+
+        result: dict[str, Any] = {}
+        for label, value in raw.items():
+            if isinstance(value, Vocabulary):
+                result[label] = value
+            elif isinstance(value, str):
+                # File path — resolve relative to pipeline directory
+                vocab_path = self._dir / value
+                try:
+                    result[label] = Vocabulary.from_file(vocab_path)
+                except FileNotFoundError:
+                    logger.warning("Vocabulary file not found: %s", vocab_path)
+            elif isinstance(value, dict):
+                result[label] = Vocabulary.from_dict({**value, "label": label})
+        return result
+
+    def _apply_growth_policies(
+        self,
+        rctx: RunContext,
+        effective_models: dict[str, dict[str, Any]],
+    ) -> None:
+        """Fire growth policies for novel/fuzzy suggestions recorded during the run."""
+        from .vocab import Vocabulary
+
+        if not rctx._vocab_suggestions:
+            return
+
+        for suggestion in rctx._vocab_suggestions:
+            if suggestion.match_type == "exact":
+                continue
+
+            # Use the direct vocab object reference stored on the suggestion
+            vocab: Vocabulary | None = getattr(suggestion, "_vocab", None)
+            if vocab is None:
+                # Fall back to looking up by label in loaded vocabularies
+                vocab_label = suggestion.vocab_label
+                if not vocab_label:
+                    continue
+                vocab = self._vocabularies.get(vocab_label)
+            if not isinstance(vocab, Vocabulary):
+                continue
+
+            policy = vocab.growth_policy
+
+            accepted = False
+            if policy == "auto":
+                accepted = True
+            elif policy == "human":
+                vocab.add_pending(suggestion)
+            elif policy == "llm":
+                accepted = self._llm_growth_decision(suggestion, vocab, effective_models)
+            elif callable(policy):
+                try:
+                    accepted = bool(policy(suggestion))
+                except Exception as e:
+                    logger.warning("growth_policy callable raised: %s", e)
+
+            if accepted:
+                vocab.add_term(suggestion.raw_value)
+                logger.info(
+                    "Vocab '%s': added '%s' via policy=%s",
+                    vocab.label, suggestion.raw_value, policy
+                )
+
+            # Persist if configured
+            if vocab.persist:
+                persist_path = self._resolve_persist_path(vocab)
+                if persist_path:
+                    try:
+                        vocab.save(persist_path)
+                    except Exception as e:
+                        logger.warning("Failed to save vocabulary '%s': %s", vocab.label, e)
+
+    def _resolve_persist_path(self, vocab: Any) -> Path | None:
+        """Resolve the persist path for a vocabulary relative to the pipeline dir."""
+        from .vocab import Vocabulary
+        if not isinstance(vocab, Vocabulary) or not vocab.persist:
+            return None
+        if vocab.persist is True:
+            return self._dir / "vocabularies" / f"{vocab.label}.yaml"
+        return self._dir / vocab.persist
+
+    def _llm_growth_decision(
+        self,
+        suggestion: Any,
+        vocab: Any,
+        effective_models: dict[str, dict[str, Any]],
+    ) -> bool:
+        """Ask the LLM whether to add a novel term to the vocabulary."""
+        from .llm import call_llm
+
+        model_name = vocab.growth_policy_model or next(iter(effective_models), None)
+        if not model_name:
+            logger.warning("No model available for LLM growth policy; defaulting to deny")
+            return False
+
+        model_config = effective_models.get(model_name, {})
+        try:
+            client = self._get_client(model_name, model_config)
+        except Exception as e:
+            logger.warning("Could not get client for LLM growth policy: %s", e)
+            return False
+
+        known_str = ", ".join(sorted(vocab.known))
+        denied_str = ", ".join(sorted(vocab.denied)) if vocab.denied else "none"
+        ideal_info = f" (LLM's ideal answer: '{suggestion.ideal_value}')" if suggestion.ideal_value else ""
+        desc_info = f"\nDescription: {vocab.description}" if vocab.description else ""
+
+        prompt = (
+            f"You are reviewing whether a new term should be added to a controlled vocabulary.\n"
+            f"Vocabulary: {vocab.label}{desc_info}\n"
+            f"Current known terms: [{known_str}]\n"
+            f"Explicitly denied terms: [{denied_str}]\n\n"
+            f"The system encountered: '{suggestion.raw_value}'{ideal_info}\n\n"
+            f"Should '{suggestion.raw_value}' be added to the vocabulary? "
+            f"Reply with only 'yes' or 'no'."
+        )
+        try:
+            response, _ = call_llm(
+                client=client,
+                messages=[{"role": "user", "content": prompt}],
+                model=model_config.get("model", ""),
+                timeout=model_config.get("timeout", 30),
+            )
+            return response.strip().lower().startswith("yes")
+        except Exception as e:
+            logger.warning("LLM growth policy call failed: %s", e)
+            return False
 
     # ── Input resolution ───────────────────────────────────────────────────────
 
