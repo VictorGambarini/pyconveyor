@@ -10,7 +10,7 @@ Public API::
 """
 from __future__ import annotations
 
-from .batch import BatchResult, BatchRunner
+from .batch import BatchResult, BatchRunner, BatchSummary
 from .graph import generate_mermaid
 from .llm import register_provider
 from .runner import (
@@ -26,6 +26,7 @@ __all__ = [
     "PipelineRunner",
     "BatchRunner",
     "BatchResult",
+    "BatchSummary",
     "RunContext",
     "RunSummary",
     "StepResult",

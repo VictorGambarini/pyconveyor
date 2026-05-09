@@ -352,13 +352,20 @@ class PipelineRunner:
                 rctx._step_results[name] = sr
                 rctx.metadata["attempt_logs"].extend(attempt_logs)
 
-                # Count LLM calls
+                # Count LLM calls and fire on_llm_call hooks
                 if step.get("type", "llm") == "llm" or (step.get("type") is None and "prompt" in step):
                     rctx._llm_calls += len(attempt_logs)
+                    model_ref = step.get("model", "")
+                    model_id = effective_models.get(model_ref, {}).get("model", model_ref)
                     for al in attempt_logs:
                         if al.tokens:
                             rctx._total_input_tokens += al.tokens.get("prompt_tokens", 0)
                             rctx._total_output_tokens += al.tokens.get("completion_tokens", 0)
+                        for hook in self._hooks["on_llm_call"]:
+                            try:
+                                hook(name, model_id, al.raw_output)
+                            except Exception as he:
+                                logger.warning("on_llm_call hook error: %s", he)
 
                 for hook in self._hooks["on_step_end"]:
                     try:

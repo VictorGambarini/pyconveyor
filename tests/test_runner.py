@@ -374,3 +374,19 @@ class TestLifecycleHooks:
             pass
 
         assert my_hook is not None
+
+    def test_on_llm_call_fired_per_attempt(self):
+        calls: list[tuple] = []
+        runner = _runner("hello.yaml")
+        runner.on_llm_call(lambda step, model, response: calls.append((step, model, response)))
+        runner.run({"name": "Ada"})
+        assert len(calls) == 1
+        step_name, model, response = calls[0]
+        assert step_name == "greet"
+        assert isinstance(response, str)
+
+    def test_on_llm_call_hook_error_does_not_abort(self):
+        runner = _runner("hello.yaml")
+        runner.on_llm_call(lambda s, m, r: (_ for _ in ()).throw(RuntimeError("llm hook error")))
+        rctx = runner.run({"name": "Ada"})
+        assert not rctx.failed
