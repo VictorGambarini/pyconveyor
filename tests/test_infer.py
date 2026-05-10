@@ -1,7 +1,6 @@
 """Tests for pyconveyor.infer: infer_schema_source."""
 from __future__ import annotations
 
-import pytest
 from pydantic import BaseModel
 
 from pyconveyor.infer import infer_schema_source

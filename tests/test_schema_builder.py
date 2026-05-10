@@ -13,99 +13,97 @@ from pyconveyor.schema_builder import (
     yaml_dict_to_model,
 )
 
-
 # ── yaml_dict_to_model ────────────────────────────────────────────────────────
 
 class TestYamlDictToModel:
     def test_str_field(self):
-        M = yaml_dict_to_model("M", {"name": "str"})
-        assert issubclass(M, BaseModel)
-        m = M(name="hello")
+        model = yaml_dict_to_model("M", {"name": "str"})
+        assert issubclass(model, BaseModel)
+        m = model(name="hello")
         assert m.name == "hello"
 
     def test_int_field(self):
-        M = yaml_dict_to_model("M", {"count": "int"})
-        m = M(count=5)
+        model = yaml_dict_to_model("M", {"count": "int"})
+        m = model(count=5)
         assert m.count == 5
 
     def test_float_field(self):
-        M = yaml_dict_to_model("M", {"score": "float"})
-        m = M(score=3.14)
+        model = yaml_dict_to_model("M", {"score": "float"})
+        m = model(score=3.14)
         assert m.score == pytest.approx(3.14)
 
     def test_bool_field(self):
-        M = yaml_dict_to_model("M", {"flag": "bool"})
-        m = M(flag=True)
+        model = yaml_dict_to_model("M", {"flag": "bool"})
+        m = model(flag=True)
         assert m.flag is True
 
     def test_list_str_field(self):
-        M = yaml_dict_to_model("M", {"tags": "list[str]"})
-        m = M(tags=["a", "b"])
+        model = yaml_dict_to_model("M", {"tags": "list[str]"})
+        m = model(tags=["a", "b"])
         assert m.tags == ["a", "b"]
 
     def test_list_int_field(self):
-        M = yaml_dict_to_model("M", {"nums": "list[int]"})
-        m = M(nums=[1, 2, 3])
+        model = yaml_dict_to_model("M", {"nums": "list[int]"})
+        m = model(nums=[1, 2, 3])
         assert m.nums == [1, 2, 3]
 
     def test_list_float_field(self):
-        M = yaml_dict_to_model("M", {"vals": "list[float]"})
-        m = M(vals=[1.1, 2.2])
+        model = yaml_dict_to_model("M", {"vals": "list[float]"})
+        m = model(vals=[1.1, 2.2])
         assert m.vals[0] == pytest.approx(1.1)
 
     def test_list_bool_field(self):
-        M = yaml_dict_to_model("M", {"flags": "list[bool]"})
-        m = M(flags=[True, False])
+        model = yaml_dict_to_model("M", {"flags": "list[bool]"})
+        m = model(flags=[True, False])
         assert m.flags == [True, False]
 
     def test_dict_str_str_field(self):
-        M = yaml_dict_to_model("M", {"meta": "dict[str, str]"})
-        m = M(meta={"key": "val"})
+        model = yaml_dict_to_model("M", {"meta": "dict[str, str]"})
+        m = model(meta={"key": "val"})
         assert m.meta == {"key": "val"}
 
     def test_dict_str_int_field(self):
-        M = yaml_dict_to_model("M", {"counts": "dict[str, int]"})
-        m = M(counts={"a": 1})
+        model = yaml_dict_to_model("M", {"counts": "dict[str, int]"})
+        m = model(counts={"a": 1})
         assert m.counts == {"a": 1}
 
     def test_dict_str_float_field(self):
-        M = yaml_dict_to_model("M", {"scores": "dict[str, float]"})
-        m = M(scores={"x": 0.5})
+        model = yaml_dict_to_model("M", {"scores": "dict[str, float]"})
+        m = model(scores={"x": 0.5})
         assert m.scores["x"] == pytest.approx(0.5)
 
     def test_optional_str_field_default_none(self):
-        M = yaml_dict_to_model("M", {"note": "str | None"})
-        m = M()
+        model = yaml_dict_to_model("M", {"note": "str | None"})
+        m = model()
         assert m.note is None
 
     def test_optional_str_not_required(self):
-        M = yaml_dict_to_model("M", {"note": "str | None"})
-        m = M(note="hello")
+        model = yaml_dict_to_model("M", {"note": "str | None"})
+        m = model(note="hello")
         assert m.note == "hello"
 
     def test_optional_int_field(self):
-        M = yaml_dict_to_model("M", {"score": "int | None"})
-        assert M().score is None
-        assert M(score=42).score == 42
+        model = yaml_dict_to_model("M", {"score": "int | None"})
+        assert model().score is None
+        assert model(score=42).score == 42
 
     def test_optional_list_str_field(self):
-        M = yaml_dict_to_model("M", {"tags": "list[str] | None"})
-        assert M().tags is None
-        assert M(tags=["x"]).tags == ["x"]
+        model = yaml_dict_to_model("M", {"tags": "list[str] | None"})
+        assert model().tags is None
+        assert model(tags=["x"]).tags == ["x"]
 
     def test_optional_dict_field(self):
-        M = yaml_dict_to_model("M", {"meta": "dict[str, str] | None"})
-        assert M().meta is None
+        model = yaml_dict_to_model("M", {"meta": "dict[str, str] | None"})
+        assert model().meta is None
 
     def test_required_field_raises_on_missing(self):
-        M = yaml_dict_to_model("M", {"name": "str"})
+        model = yaml_dict_to_model("M", {"name": "str"})
         with pytest.raises(ValidationError):
-            M()
+            model()
 
     def test_optional_field_not_required(self):
-        M = yaml_dict_to_model("M", {"x": "str | None"})
-        # Should not raise
-        m = M()
+        model = yaml_dict_to_model("M", {"x": "str | None"})
+        m = model()
         assert m.x is None
 
     def test_unsupported_type_raises_schema_ref_error(self):
@@ -113,25 +111,25 @@ class TestYamlDictToModel:
             yaml_dict_to_model("M", {"ts": "datetime"})
 
     def test_multiple_fields(self):
-        M = yaml_dict_to_model("Article", {
+        model = yaml_dict_to_model("Article", {
             "title": "str",
             "score": "int | None",
             "tags": "list[str]",
         })
-        m = M(title="Hello", tags=["a"])
+        m = model(title="Hello", tags=["a"])
         assert m.title == "Hello"
         assert m.score is None
         assert m.tags == ["a"]
 
     def test_empty_field_map_returns_valid_model(self):
-        M = yaml_dict_to_model("Empty", {})
-        assert issubclass(M, BaseModel)
-        m = M()
+        model = yaml_dict_to_model("Empty", {})
+        assert issubclass(model, BaseModel)
+        m = model()
         assert m is not None
 
     def test_pipe_none_no_space(self):
-        M = yaml_dict_to_model("M", {"x": "str|None"})
-        assert M().x is None
+        model = yaml_dict_to_model("M", {"x": "str|None"})
+        assert model().x is None
 
     def test_list_unsupported_inner_type_raises(self):
         with pytest.raises(SchemaRefError):
@@ -146,26 +144,26 @@ class TestYamlDictToModel:
 
 class TestModelToSchemaHint:
     def test_required_fields_have_required_suffix(self):
-        M = yaml_dict_to_model("M", {"title": "str", "count": "int"})
-        hint = model_to_schema_hint(M)
+        model = yaml_dict_to_model("M", {"title": "str", "count": "int"})
+        hint = model_to_schema_hint(model)
         assert "(required)" in hint
         assert '"title": string (required)' in hint
         assert '"count": integer (required)' in hint
 
     def test_optional_fields_have_or_null_suffix(self):
-        M = yaml_dict_to_model("M", {"note": "str | None"})
-        hint = model_to_schema_hint(M)
+        model = yaml_dict_to_model("M", {"note": "str | None"})
+        hint = model_to_schema_hint(model)
         assert "or null" in hint
         assert "(required)" not in hint
 
     def test_list_str_described_as_array_of_string(self):
-        M = yaml_dict_to_model("M", {"tags": "list[str]"})
-        hint = model_to_schema_hint(M)
+        model = yaml_dict_to_model("M", {"tags": "list[str]"})
+        hint = model_to_schema_hint(model)
         assert "array of string" in hint
 
     def test_list_int_described_as_array_of_integer(self):
-        M = yaml_dict_to_model("M", {"nums": "list[int]"})
-        hint = model_to_schema_hint(M)
+        model = yaml_dict_to_model("M", {"nums": "list[int]"})
+        hint = model_to_schema_hint(model)
         assert "array of integer" in hint
 
     def test_dict_str_any_described(self):
@@ -189,8 +187,8 @@ class TestModelToSchemaHint:
         assert model_to_schema_hint(Empty) == ""
 
     def test_first_line_is_header(self):
-        M = yaml_dict_to_model("M", {"x": "str"})
-        hint = model_to_schema_hint(M)
+        model = yaml_dict_to_model("M", {"x": "str"})
+        hint = model_to_schema_hint(model)
         assert hint.startswith("Return a JSON object with the following fields:")
 
 
