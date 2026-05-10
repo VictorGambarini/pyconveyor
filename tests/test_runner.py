@@ -584,7 +584,7 @@ class TestSchemasKwarg:
     def test_schemas_none_changes_nothing(self, tmp_path: Path):
         pipeline = self._simple_pipeline(tmp_path)
         runner = PipelineRunner(pipeline, schemas=None)
-        assert runner is not None
+        assert "_schema_cls" not in runner._spec["steps"][0]
 
     def test_kwarg_overrides_yaml_schema(self, tmp_path: Path):
         """schemas= kwarg wins over schema: in YAML."""
@@ -594,9 +594,6 @@ class TestSchemasKwarg:
             title: str
             score: int
 
-        # Pipeline already has a schema ref
-        pipeline = _runner("hello.yaml")._path.parent / "hello.yaml"
-        # Use tmp_path pipeline with existing schema key
         (tmp_path / "p.j2").write_text("Hello.")
         p = tmp_path / "pipeline.yaml"
         p.write_text(
@@ -629,7 +626,7 @@ class TestSchemasKwarg:
 
         pipeline = self._simple_pipeline(tmp_path)
         br = BatchRunner(pipeline, schemas={"extract": MyModel})
-        assert br is not None
+        assert br._runner._spec["steps"][0]["_schema_cls"] is MyModel
 
 
 # ── Feature 4: schema_hint template variable ──────────────────────────────────

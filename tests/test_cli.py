@@ -515,11 +515,13 @@ class TestCliInitInteractive:
         assert "schema: schemas:" not in text
 
     def test_schemas_py_not_written(self, tmp_path: Path) -> None:
-        self._run_interactive(tmp_path, ["docs", "title:str", "", "1"])
+        code, _ = self._run_interactive(tmp_path, ["docs", "title:str", "", "1"])
+        assert code == 0
         assert not (tmp_path / "project" / "schemas.py").exists()
 
     def test_prompt_template_written_with_schema_hint(self, tmp_path: Path) -> None:
-        self._run_interactive(tmp_path, ["docs", "title:str", "", "1"])
+        code, _ = self._run_interactive(tmp_path, ["docs", "title:str", "", "1"])
+        assert code == 0
         tmpl = (tmp_path / "project" / "prompts" / "extract.j2").read_text()
         assert "schema_hint" in tmpl
 

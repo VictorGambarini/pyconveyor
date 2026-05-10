@@ -429,13 +429,10 @@ def _cmd_schema(args: Any) -> None:
 
 
 def _cmd_schema_infer(args: Any) -> None:
-    import json as _json
-    from pathlib import Path as _Path
-
     from .infer import infer_schema_source
     from .runner import _inline_schema_name
 
-    sample_path = _Path(args.sample)
+    sample_path = Path(args.sample)
     if not sample_path.exists():
         print(f"Error: sample file not found: {sample_path}", file=sys.stderr)
         sys.exit(1)
@@ -450,22 +447,22 @@ def _cmd_schema_infer(args: Any) -> None:
                 "Using the first record only.",
                 file=sys.stderr,
             )
-        sample = _json.loads(lines[0])
+        sample = json.loads(lines[0])
     else:
-        sample = _json.loads(raw)
+        sample = json.loads(raw)
 
     if not isinstance(sample, dict):
         print("Error: sample must be a JSON object (dict), not a list or scalar.", file=sys.stderr)
         sys.exit(1)
 
-    pipeline_path = _Path(args.pipeline)
+    pipeline_path = Path(args.pipeline)
     step_name = args.step or _first_llm_step_name(pipeline_path)
     class_name = _inline_schema_name(step_name)
 
     source = infer_schema_source(class_name, sample)
 
     if args.output:
-        out_path = _Path(args.output)
+        out_path = Path(args.output)
         out_path.write_text(source, encoding="utf-8")
         print(f"Wrote {out_path}")
     else:
