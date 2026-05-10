@@ -1,0 +1,26 @@
+# Ensemble where optional member fails — judge skipped (only 1 succeeded), falls back.
+
+models:
+  primary:
+    provider: mock
+    model: mock-primary
+    mock_responses:
+      - '{"message": "Hello!", "language": "English"}'
+  reviewer:
+    provider: mock
+    model: mock-reviewer
+    mock_responses:
+      - 'not valid json {{{'
+
+steps:
+  - name: extract
+    type: ensemble
+    schema: tests.fixtures.schemas:Greeting
+    prompt: greet.j2
+    members:
+      - model: primary
+      - model: reviewer
+        required: false
+    judge:
+      model: primary
+      condition: all_succeeded

@@ -1,0 +1,31 @@
+# Ensemble step: two models run in parallel, judge merges if both succeed.
+
+models:
+  primary:
+    provider: mock
+    model: mock-primary
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+  reviewer:
+    provider: mock
+    model: mock-reviewer
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+  judge_model:
+    provider: mock
+    model: mock-judge
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+
+steps:
+  - name: extract
+    type: ensemble
+    schema: tests.fixtures.schemas:Greeting
+    prompt: greet.j2
+    members:
+      - model: primary
+      - model: reviewer
+        required: false
+    judge:
+      model: judge_model
+      condition: all_succeeded
