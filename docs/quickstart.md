@@ -14,7 +14,62 @@ For Anthropic support:
 pip install "pyconveyor[anthropic]"
 ```
 
-## Bootstrap a project
+---
+
+## Option A — Interactive setup (recommended for new users)
+
+The interactive setup guides you through defining your schema and choosing a provider. No Python files needed.
+
+```bash
+pyconveyor init my_pipeline/ --interactive
+cd my_pipeline/
+```
+
+> **Screenshot placeholder:** terminal showing the interactive `pyconveyor init --interactive` prompts — asking for subject, field definitions, and provider choice.
+
+You'll be asked:
+
+1. **What are you extracting from?** (e.g. `invoices`, `articles`) — used as a label
+2. **Output fields** — one per line, in `name:type` format:
+   ```
+   > invoice_number:str
+   > vendor:str
+   > amount:float
+   > due_date:str | None
+   >              ← press Enter to finish
+   ```
+3. **Which LLM provider?** — OpenAI, Anthropic, or Ollama
+
+This generates a `pipeline.yaml` with an inline schema:
+
+```yaml
+models:
+  default:
+    provider: openai_compat
+    api_key:  ${OPENAI_API_KEY}
+    model:    ${MODEL_NAME:-gpt-4o-mini}
+    timeout:  120
+
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt: prompts/extract.j2
+    schema:
+      invoice_number: str
+      vendor: str
+      amount: float
+      due_date: str | None
+    max_attempts: 3
+```
+
+No `schemas.py` file. The schema lives in the YAML.
+
+---
+
+## Option B — Static setup
+
+If you prefer the traditional layout with a `schemas.py` file:
 
 ```bash
 pyconveyor init my_pipeline/
@@ -35,19 +90,27 @@ my_pipeline/
     └── settings.json      # editor autocomplete config
 ```
 
+---
+
 ## Set your API key
 
 ```bash
 export OPENAI_API_KEY=sk-...
-# or for local models:
+
+# For local models (Ollama):
 export OPENAI_BASE_URL=http://localhost:11434/v1
 export OPENAI_API_KEY=ollama
+
+# For Anthropic:
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+---
 
 ## Run
 
 ```bash
-pyconveyor run pipeline.yaml --input '{"document": "The quick brown fox."}'
+pyconveyor run pipeline.yaml --input '{"document": "Invoice from Acme Corp, $4,250 due 2024-03-15"}'
 ```
 
 Output:
@@ -56,8 +119,10 @@ Output:
 {
   "steps": {
     "extract": {
-      "title": "The quick brown fox",
-      "key_points": ["A fox described as quick and brown"]
+      "invoice_number": null,
+      "vendor": "Acme Corp",
+      "amount": 4250.0,
+      "due_date": "2024-03-15"
     }
   },
   "summary": {
@@ -69,74 +134,7 @@ Output:
 }
 ```
 
-## Understand the generated files
-
-### `pipeline.yaml`
-
-```yaml
-models:
-  default:
-    provider: openai_compat
-    base_url: ${OPENAI_BASE_URL}
-    api_key:  ${OPENAI_API_KEY}
-    model:    ${MODEL_NAME:-gpt-4o-mini}
-    timeout:  120
-
-steps:
-  - name: extract
-    type: llm
-    model: default
-    prompt: prompts/extract.j2
-    schema: schemas:ExtractionResult
-    max_attempts: 3
-```
-
-`${VAR}` syntax reads from environment variables. `${VAR:-default}` provides a fallback.
-
-### `schemas.py`
-
-```python
-from pydantic import BaseModel
-from typing import List
-
-class ExtractionResult(BaseModel):
-    title: str
-    key_points: List[str]
-```
-
-The `schema:` field in the pipeline points to this class as `schemas:ExtractionResult` (module:class). pyconveyor validates every LLM response against it and retries automatically if validation fails.
-
-### `prompts/extract.j2`
-
-```jinja2
-Extract structured information from the following document.
-
-Document:
-{{ ctx.document }}
-
-Return a JSON object with the following fields:
-- "title": string — the document title or a short summary
-- "key_points": array of strings — up to 5 key points
-```
-
-`ctx` is the input dict passed to `runner.run()`. All keys are available as `ctx.<key>`.
-
-## Use from Python
-
-```python
-from pyconveyor import PipelineRunner
-
-runner = PipelineRunner("my_pipeline/pipeline.yaml")
-result = runner.run({"document": "Full text of the paper…"})
-
-if result.failed:
-    print("Failed at step:", result.failure_state.step_name)
-    print("Error:", result.failure_state.exception)
-else:
-    extraction = result.steps["extract"].value  # ExtractionResult instance
-    print(extraction.title)
-    print(extraction.key_points)
-```
+---
 
 ## Validate without running
 
@@ -147,9 +145,77 @@ pyconveyor validate pipeline.yaml
 
 Catches all errors — bad field names, missing imports, invalid expressions — before spending any tokens.
 
+---
+
+## Visualise the pipeline
+
+```bash
+pyconveyor visualise pipeline.yaml
+```
+
+```mermaid
+graph TD
+    extract
+```
+
+For multi-step pipelines this shows the full step DAG. Paste it into GitHub, GitLab, or Notion for a rendered diagram.
+
+---
+
+## Process a file with Python
+
+```python
+from pyconveyor import PipelineRunner
+
+runner = PipelineRunner("my_pipeline/pipeline.yaml")
+result = runner.run({"document": "Full text of the document…"})
+
+if result.failed:
+    print("Failed at step:", result.failure_state.step_name)
+    print("Error:", result.failure_state.exception)
+else:
+    extraction = result.steps["extract"].value
+    print(extraction)  # dict (or Pydantic model if schemas.py is used)
+```
+
+---
+
+## Process many documents at once
+
+```bash
+# input.jsonl — one document per line
+echo '{"id": "1", "document": "Invoice from Acme…"}' >> input.jsonl
+echo '{"id": "2", "document": "Receipt from Beta…"}' >> input.jsonl
+
+pyconveyor batch pipeline.yaml --input input.jsonl --output results.jsonl --workers 8
+```
+
+---
+
+## Measure accuracy with benchmarking
+
+Once you have some documents with known-correct outputs, benchmark your pipeline:
+
+```bash
+# Create a benchmark case
+mkdir -p benchmarks/case_001
+echo '{"document": "Invoice from Acme Corp, $4,250"}' > benchmarks/case_001/input.json
+echo '{"extract": {"vendor": "Acme Corp", "amount": 4250.0}}' > benchmarks/case_001/expected.json
+
+# Run the benchmark
+pyconveyor benchmark benchmarks/ --pipeline pipeline.yaml --report report.html
+open report.html
+```
+
+See the [Benchmarking guide](guides/benchmarking.md) for details.
+
+---
+
 ## Next steps
 
-- [Concepts](concepts.md) — understand the data flow
-- [Step Types](guides/step-types.md) — add transform, validate, and parallel steps
+- [Concepts](concepts.md) — understand how pipelines, steps, and context fit together
+- [Step Types](guides/step-types.md) — add `transform`, `validate`, `parallel`, and `condition` steps
 - [Validation Feedback](guides/validation-feedback.md) — how self-correcting retries work
+- [Benchmarking](guides/benchmarking.md) — measure and improve pipeline accuracy
 - [YAML Schema](reference/schema.md) — full field reference
+- [CLI Reference](reference/cli.md) — all commands and options
