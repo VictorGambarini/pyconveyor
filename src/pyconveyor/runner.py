@@ -1026,7 +1026,9 @@ class PipelineRunner:
 
 def _inline_schema_name(step_name: str) -> str:
     """Generate a stable class name for an inline YAML schema."""
-    return "".join(w.capitalize() for w in step_name.replace("-", "_").split("_")) + "Schema"
+    import re
+    safe = re.sub(r"[^a-zA-Z0-9_\-]", "", step_name)
+    return "".join(w.capitalize() for w in safe.replace("-", "_").split("_")) + "Schema"
 
 
 def _import_schema(ref: str, file_str: str, key_path: str) -> type:

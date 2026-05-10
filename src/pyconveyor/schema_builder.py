@@ -76,6 +76,12 @@ def yaml_dict_to_model(name: str, field_map: dict[str, str]) -> type:
 
     field_defs: dict[str, tuple[type, Any]] = {}
     for field_name, type_str in field_map.items():
+        if not isinstance(field_name, str):
+            raise SchemaRefError(
+                f"Field name {field_name!r} is not a string. "
+                "Quote YAML booleans/null like '\"yes\"', '\"true\"', '\"null\"' "
+                "to use them as field names.",
+            )
         try:
             python_type, default = _parse_type(type_str)
         except SchemaRefError:

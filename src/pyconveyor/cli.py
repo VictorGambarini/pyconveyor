@@ -441,6 +441,9 @@ def _cmd_schema_infer(args: Any) -> None:
 
     if sample_path.suffix == ".jsonl" or (raw and raw[0] != "{" and "\n" in raw):
         lines = [ln for ln in raw.splitlines() if ln.strip()]
+        if not lines:
+            print("Error: sample file is empty.", file=sys.stderr)
+            sys.exit(1)
         if len(lines) > 1:
             print(
                 f"Warning: {sample_path} has {len(lines)} records. "

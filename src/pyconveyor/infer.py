@@ -40,6 +40,20 @@ def _infer_field_type(value: Any) -> str:
     return "Any"
 
 
+def _sanitize_field_name(key: str) -> str:
+    """Convert a JSON key to a valid Python identifier.
+
+    Rules: replace non-identifier characters with ``_``, prefix digit-leading
+    names with ``f_``.  Keys that are already valid identifiers pass through
+    unchanged.
+    """
+    import re
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", key)
+    if sanitized and sanitized[0].isdigit():
+        sanitized = "f_" + sanitized
+    return sanitized or "field"
+
+
 def infer_schema_source(class_name: str, sample: dict[str, Any]) -> str:
     """Return a Python source string defining a pydantic.BaseModel subclass
     whose fields match the keys and inferred types of *sample*.
@@ -56,7 +70,9 @@ def infer_schema_source(class_name: str, sample: dict[str, Any]) -> str:
 
     The returned source string includes the necessary imports.
     """
-    field_types: dict[str, str] = {k: _infer_field_type(v) for k, v in sample.items()}
+    field_types: dict[str, str] = {
+        _sanitize_field_name(str(k)): _infer_field_type(v) for k, v in sample.items()
+    }
 
     needs_any = any("Any" in t for t in field_types.values())
     needs_optional = any(t.startswith("Optional") for t in field_types.values())
