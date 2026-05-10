@@ -1,8 +1,7 @@
 """Convert a YAML field-map into a Pydantic BaseModel class."""
 from __future__ import annotations
 
-from typing import Any, Optional, Union, get_args, get_origin
-
+from typing import Any, Union, get_args, get_origin
 
 _PRIMITIVES: dict[str, type] = {"str": str, "int": int, "float": float, "bool": bool}
 
@@ -54,7 +53,7 @@ def _parse_type(type_str: str) -> tuple[type, Any]:
         )
 
     if optional:
-        return Optional[base], None  # type: ignore[return-value]
+        return base | None, None  # type: ignore[return-value]
     return base, ...
 
 
@@ -86,7 +85,7 @@ def yaml_dict_to_model(name: str, field_map: dict[str, str]) -> type:
             )
         field_defs[field_name] = (python_type, default)
 
-    return create_model(name, **field_defs)  # type: ignore[call-overload]
+    return create_model(name, **field_defs)  # type: ignore[call-overload, no-any-return]
 
 
 def _is_union_type(annotation: Any) -> bool:

@@ -480,7 +480,7 @@ def _first_llm_step_name(pipeline_path: Path) -> str:
         spec = _yaml.safe_load(pipeline_path.read_text(encoding="utf-8")) or {}
         for step in spec.get("steps", []):
             if step.get("type", "llm") == "llm":
-                return step.get("name", "Extract")
+                return str(step.get("name", "Extract"))
     except Exception:
         pass
     return "Extract"
