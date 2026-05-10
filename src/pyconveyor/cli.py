@@ -21,6 +21,11 @@ def main() -> None:
     # init
     p_init = sub.add_parser("init", help="Bootstrap a new pipeline directory")
     p_init.add_argument("directory", nargs="?", default=".", help="Target directory (default: .)")
+    p_init.add_argument(
+        "--interactive", "-i",
+        action="store_true",
+        help="Guided setup: define fields and provider interactively",
+    )
 
     # run
     p_run = sub.add_parser("run", help="Run a pipeline")
@@ -37,8 +42,19 @@ def main() -> None:
     p_val = sub.add_parser("validate", help="Validate a pipeline YAML")
     p_val.add_argument("pipeline", help="Path to pipeline.yaml")
 
-    # schema
-    p_schema = sub.add_parser("schema", help="Emit JSONSchema for the pipeline YAML format")
+    # schema (sub-group: emit | infer)
+    p_schema = sub.add_parser("schema", help="JSONSchema utilities")
+    schema_sub = p_schema.add_subparsers(dest="schema_command")
+    # schema emit (existing behaviour; also the default when no sub-command given)
+    p_schema_emit = schema_sub.add_parser("emit", help="Emit JSONSchema for the pipeline YAML format")
+    p_schema_emit.add_argument("--indent", type=int, default=2)
+    # schema infer
+    p_schema_infer = schema_sub.add_parser("infer", help="Infer a schemas.py from sample JSON output")
+    p_schema_infer.add_argument("pipeline", help="Path to pipeline.yaml")
+    p_schema_infer.add_argument("--sample", required=True, help="Path to a .json or .jsonl sample file")
+    p_schema_infer.add_argument("--step", default=None, help="Step name to infer schema for (default: first llm step)")
+    p_schema_infer.add_argument("--output", "-o", default=None, help="Output file path (default: stdout)")
+    # keep --indent on the parent for the alias `pyconveyor schema` → emit
     p_schema.add_argument("--indent", type=int, default=2)
 
     # batch
@@ -83,7 +99,11 @@ def main() -> None:
     elif args.command == "validate":
         _cmd_validate(args)
     elif args.command == "schema":
-        _cmd_schema(args)
+        if getattr(args, "schema_command", None) == "infer":
+            _cmd_schema_infer(args)
+        else:
+            # Both "emit" sub-command and bare "pyconveyor schema" go here
+            _cmd_schema(args)
     elif args.command in ("visualise", "visualize"):
         _cmd_visualise(args)
     elif args.command == "vocab":
@@ -94,6 +114,13 @@ def main() -> None:
 # ── init ───────────────────────────────────────────────────────────────────────
 
 def _cmd_init(args: Any) -> None:
+    if getattr(args, "interactive", False):
+        _cmd_init_interactive(Path(args.directory))
+    else:
+        _cmd_init_static(args)
+
+
+def _cmd_init_static(args: Any) -> None:
     target = Path(args.directory)
     target.mkdir(parents=True, exist_ok=True)
 
@@ -138,6 +165,86 @@ def _cmd_init(args: Any) -> None:
     print(f"  cd {target}")
     print("  export OPENAI_API_KEY=sk-...")
     print("  pyconveyor run pipeline.yaml --input '{\"document\": \"your text here\"}'")
+
+
+def _cmd_init_interactive(target: Path) -> None:
+    from .schema_builder import yaml_dict_to_model
+
+    print()
+    subject = input('What are you extracting from? (e.g. "articles", "invoices") ').strip() or "documents"
+
+    print()
+    print("Define your output fields. Format: name:type")
+    print("Types: str, int, float, bool, list[str], list[int], list[float], dict[str,str]")
+    print("Append  | None  to make a field optional  (e.g.  score:int | None)")
+    print("Press Enter on an empty line when done.")
+    print()
+
+    fields: dict[str, str] = {}
+    while True:
+        line = input("> ").strip()
+        if not line:
+            break
+        if ":" not in line:
+            print("  Format must be  name:type  — try again.")
+            continue
+        fname, ftype = line.split(":", 1)
+        fname = fname.strip()
+        ftype = ftype.strip()
+        if not fname.isidentifier():
+            print(f"  '{fname}' is not a valid Python identifier — try again.")
+            continue
+        try:
+            yaml_dict_to_model("_Tmp", {fname: ftype})
+        except Exception:
+            print(
+                f"  Unsupported type '{ftype}'. "
+                "Supported: str, int, float, bool, list[str], list[int], list[float], dict[str,str]  (append | None for optional)"
+            )
+            continue
+        fields[fname] = ftype
+
+    if not fields:
+        print("No fields defined — using default schema.")
+        fields = {"title": "str", "key_points": "list[str]"}
+
+    print()
+    print("Which LLM provider?")
+    print("  1) OpenAI (or compatible)")
+    print("  2) Anthropic Claude")
+    print("  3) Ollama (local)")
+    choice = input("Enter choice [1]: ").strip() or "1"
+
+    provider_config = _provider_config_for_choice(choice)
+
+    schema_lines = "\n".join(f"      {k}: {v}" for k, v in fields.items())
+
+    pipeline_src = _PIPELINE_INTERACTIVE_TMPL.format(
+        provider_block=provider_config,
+        schema_block=schema_lines,
+    )
+
+    target.mkdir(parents=True, exist_ok=True)
+    _write_template(target / "pipeline.yaml", pipeline_src)
+    _write_template(target / "prompts" / "extract.j2", _PROMPT_TMPL)
+    _write_template(target / "steps.py", _STEPS_TMPL)
+
+    schema_path = target / "pyconveyor-schema.json"
+    schema_doc = _pipeline_jsonschema()
+    schema_path.write_text(json.dumps(schema_doc, indent=2) + "\n", encoding="utf-8")
+    _write_template(
+        target / ".vscode" / "settings.json",
+        _VSCODE_SETTINGS_TMPL.format(schema_file="pyconveyor-schema.json"),
+    )
+
+    print(f"\nBootstrapped {target}/ — 5 files written.\n")
+    print(f"  pipeline.yaml          — inline schema for '{subject}'")
+    print("  prompts/extract.j2     — prompt with {{ schema_hint }} pre-filled")
+    print("  steps.py               — custom step functions")
+    print("  pyconveyor-schema.json — JSONSchema for editor autocomplete")
+    print("  .vscode/settings.json  — editor autocomplete config")
+    _print_run_instructions(target, provider_config)
+
 
 
 def _write_template(path: Path, content: str) -> None:
@@ -319,6 +426,83 @@ def _cmd_validate(args: Any) -> None:
 def _cmd_schema(args: Any) -> None:
     doc = _pipeline_jsonschema()
     print(json.dumps(doc, indent=args.indent))
+
+
+def _cmd_schema_infer(args: Any) -> None:
+    import json as _json
+    from pathlib import Path as _Path
+
+    from .infer import infer_schema_source
+    from .runner import _inline_schema_name
+
+    sample_path = _Path(args.sample)
+    if not sample_path.exists():
+        print(f"Error: sample file not found: {sample_path}", file=sys.stderr)
+        sys.exit(1)
+
+    raw = sample_path.read_text(encoding="utf-8").strip()
+
+    if sample_path.suffix == ".jsonl" or (raw and raw[0] != "{" and "\n" in raw):
+        lines = [ln for ln in raw.splitlines() if ln.strip()]
+        if len(lines) > 1:
+            print(
+                f"Warning: {sample_path} has {len(lines)} records. "
+                "Using the first record only.",
+                file=sys.stderr,
+            )
+        sample = _json.loads(lines[0])
+    else:
+        sample = _json.loads(raw)
+
+    if not isinstance(sample, dict):
+        print("Error: sample must be a JSON object (dict), not a list or scalar.", file=sys.stderr)
+        sys.exit(1)
+
+    pipeline_path = _Path(args.pipeline)
+    step_name = args.step or _first_llm_step_name(pipeline_path)
+    class_name = _inline_schema_name(step_name)
+
+    source = infer_schema_source(class_name, sample)
+
+    if args.output:
+        out_path = _Path(args.output)
+        out_path.write_text(source, encoding="utf-8")
+        print(f"Wrote {out_path}")
+    else:
+        print(source)
+
+
+def _first_llm_step_name(pipeline_path: Path) -> str:
+    """Return the name of the first llm step in the pipeline, or 'Extract'."""
+    import yaml as _yaml
+
+    try:
+        spec = _yaml.safe_load(pipeline_path.read_text(encoding="utf-8")) or {}
+        for step in spec.get("steps", []):
+            if step.get("type", "llm") == "llm":
+                return step.get("name", "Extract")
+    except Exception:
+        pass
+    return "Extract"
+
+
+def _provider_config_for_choice(choice: str) -> str:
+    return {
+        "1": _PROVIDER_OPENAI,
+        "2": _PROVIDER_ANTHROPIC,
+        "3": _PROVIDER_OLLAMA,
+    }.get(choice, _PROVIDER_OPENAI)
+
+
+def _print_run_instructions(target: Path, provider_block: str) -> None:
+    if "ANTHROPIC" in provider_block:
+        key_hint = "export ANTHROPIC_API_KEY=sk-ant-..."
+    elif "ollama" in provider_block:
+        key_hint = "# Ollama: ensure 'ollama serve' is running"
+    else:
+        key_hint = "export OPENAI_API_KEY=sk-..."
+    print(f"\nRun:\n  cd {target}/\n  {key_hint}")
+    print('  pyconveyor run pipeline.yaml --input \'{"document": "..."}\'')
 
 
 # ── visualise ─────────────────────────────────────────────────────────────────
@@ -562,7 +746,16 @@ def _pipeline_jsonschema() -> dict[str, Any]:
                     "model": {"type": "string"},
                     "prompt": {"type": "string"},
                     "system": {"type": "string"},
-                    "schema": {"type": "string"},
+                    "schema": {
+                        "oneOf": [
+                            {"type": "string", "description": "module:ClassName reference"},
+                            {
+                                "type": "object",
+                                "description": "Inline field map. Values: str, int, float, bool, list[T], dict[str,T], T|None",
+                                "additionalProperties": {"type": "string"},
+                            },
+                        ]
+                    },
                     "parser": {"type": "string"},
                     "vars": {"type": "object"},
                     "inputs": {"type": "object"},
@@ -630,14 +823,13 @@ steps:
 
 _PROMPT_TMPL = """\
 {# prompts/extract.j2 #}
+{# schema_hint is auto-generated from your schema — edit or remove as needed #}
 Extract structured information from the following document.
+
+{{ schema_hint }}
 
 Document:
 {{ ctx.document }}
-
-Return a JSON object with the following fields:
-- "title": string — the document title or a short summary
-- "key_points": array of strings — up to 5 key points
 """
 
 _SCHEMAS_TMPL = """\
@@ -668,3 +860,40 @@ _VSCODE_SETTINGS_TMPL = """\
   }}
 }}
 """
+
+_PIPELINE_INTERACTIVE_TMPL = """\
+# pipeline.yaml — generated by pyconveyor init --interactive
+
+models:
+  default:
+{provider_block}
+
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt: prompts/extract.j2
+    schema:
+{schema_block}
+    max_attempts: 3
+"""
+
+# Provider config blocks (indented 4 spaces for the models.default: key)
+_PROVIDER_OPENAI = """\
+    provider: openai_compat
+    api_key:  ${OPENAI_API_KEY}
+    model:    ${MODEL_NAME:-gpt-4o-mini}
+    timeout:  120"""
+
+_PROVIDER_ANTHROPIC = """\
+    provider: anthropic
+    api_key:  ${ANTHROPIC_API_KEY}
+    model:    ${MODEL_NAME:-claude-haiku-4-5-20251001}
+    timeout:  120"""
+
+_PROVIDER_OLLAMA = """\
+    provider: openai_compat
+    base_url: ${OPENAI_BASE_URL:-http://localhost:11434/v1}
+    api_key:  ollama
+    model:    ${MODEL_NAME:-llama3.2}
+    timeout:  120"""

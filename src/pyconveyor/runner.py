@@ -213,9 +213,14 @@ class PipelineRunner:
             print(result.steps["extract"].value)
     """
 
-    def __init__(self, pipeline_path: str | Path) -> None:
+    def __init__(
+        self,
+        pipeline_path: str | Path,
+        schemas: dict[str, type] | None = None,
+    ) -> None:
         self._path = Path(pipeline_path).resolve()
         self._dir = self._path.parent
+        self._schema_overrides: dict[str, type] = schemas or {}
         self._spec = self._load_and_validate(self._path)
         self._clients: dict[str, Any] = {}  # model_name → client (lazy init)
         self._caches: dict[str, ResponseCache | None] = {}
@@ -782,8 +787,55 @@ class PipelineRunner:
         spec["_callables"] = callables
         spec["_parsers"] = parsers
 
+        self._apply_schema_overrides(spec, file_str, all_step_names)
+
         logger.info("Loaded pipeline '%s' with %d steps", path.name, len(steps))
         return spec  # type: ignore[no-any-return]
+
+    def _apply_schema_overrides(
+        self,
+        spec: dict[str, Any],
+        file_str: str,
+        all_step_names: set[str],
+    ) -> None:
+        """Inject schemas={} kwarg overrides into pre-resolved steps."""
+        from pydantic import BaseModel
+
+        if not self._schema_overrides:
+            return
+
+        for override_name in self._schema_overrides:
+            if override_name not in all_step_names:
+                raise StepConfigError(
+                    f"schemas kwarg references unknown step '{override_name}'",
+                    file=file_str,
+                    key_path=f"schemas['{override_name}']",
+                )
+
+        def _walk(steps: list[dict[str, Any]]) -> None:
+            for step in steps:
+                name = step.get("name", "")
+                if name in self._schema_overrides:
+                    cls = self._schema_overrides[name]
+                    if not (isinstance(cls, type) and issubclass(cls, BaseModel)):
+                        raise SchemaRefError(
+                            f"schemas['{name}'] must be a pydantic.BaseModel subclass, "
+                            f"got {cls!r}",
+                            file=file_str,
+                            key_path=f"schemas['{name}']",
+                        )
+                    step["_schema_cls"] = cls
+                if step.get("type") == "parallel":
+                    _walk(step.get("steps", []))
+                if step.get("type") == "condition":
+                    for branch in ("then", "else"):
+                        b = step.get(branch)
+                        if isinstance(b, list):
+                            _walk(b)
+                        elif isinstance(b, dict):
+                            _walk([b])
+
+        _walk(spec.get("steps", []))
 
     def _collect_step_names(self, steps: list[dict[str, Any]]) -> set[str]:
         names: set[str] = set()
@@ -919,14 +971,23 @@ class PipelineRunner:
                 suggestion=s,
             )
 
-        # schema: reference
+        # schema: reference (string) or inline YAML dict
         schema_ref = step.get("schema")
-        if schema_ref:
-            try:
-                schema_cls = _import_schema(schema_ref, file_str, f"{key_base}.schema")
+        if schema_ref is not None:
+            if isinstance(schema_ref, dict):
+                from .schema_builder import yaml_dict_to_model
+                model_name = _inline_schema_name(step["name"])
+                try:
+                    schema_cls = yaml_dict_to_model(model_name, schema_ref)
+                except Exception as e:
+                    raise SchemaRefError(str(e), file=file_str, key_path=f"{key_base}.schema") from e
                 step["_schema_cls"] = schema_cls
-            except SchemaRefError:
-                raise
+            else:
+                try:
+                    schema_cls = _import_schema(schema_ref, file_str, f"{key_base}.schema")
+                    step["_schema_cls"] = schema_cls
+                except SchemaRefError:
+                    raise
 
         # parser: reference
         parser_ref = step.get("parser")
@@ -961,6 +1022,11 @@ class PipelineRunner:
             "Step '%s': max_attempts=%d error_feedback=%s",
             name, effective_max, effective_fb
         )
+
+
+def _inline_schema_name(step_name: str) -> str:
+    """Generate a stable class name for an inline YAML schema."""
+    return "".join(w.capitalize() for w in step_name.replace("-", "_").split("_")) + "Schema"
 
 
 def _import_schema(ref: str, file_str: str, key_path: str) -> type:

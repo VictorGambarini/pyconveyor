@@ -407,3 +407,295 @@ class TestLifecycleHooks:
         runner.on_step_end(lambda name, val, rctx: (_ for _ in ()).throw(RuntimeError("step hook error")))
         rctx = runner.run({"name": "Ada"})
         assert not rctx.failed
+
+
+# ── Feature 1: Inline YAML schemas ───────────────────────────────────────────
+
+class TestInlineYamlSchema:
+    def _inline_pipeline(self, tmp_path: Path, schema_block: str, extra_step: str = "") -> Path:
+        (tmp_path / "p.j2").write_text("Extract info.")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"title": "Hello", "score": null}\'\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            f"    schema:\n{schema_block}\n"
+            + extra_step
+        )
+        return pipeline
+
+    def test_inline_dict_schema_loads(self, tmp_path: Path):
+        pipeline = self._inline_pipeline(
+            tmp_path,
+            "      title: str\n      score: int | None",
+        )
+        runner = PipelineRunner(pipeline)
+        assert runner is not None
+
+    def test_schema_cls_is_basemodel(self, tmp_path: Path):
+        from pydantic import BaseModel
+        pipeline = self._inline_pipeline(
+            tmp_path,
+            "      title: str\n      score: int | None",
+        )
+        runner = PipelineRunner(pipeline)
+        schema_cls = runner._spec["steps"][0]["_schema_cls"]
+        assert issubclass(schema_cls, BaseModel)
+
+    def test_valid_dict_instantiates(self, tmp_path: Path):
+        pipeline = self._inline_pipeline(
+            tmp_path,
+            "      title: str\n      score: int | None",
+        )
+        runner = PipelineRunner(pipeline)
+        schema_cls = runner._spec["steps"][0]["_schema_cls"]
+        m = schema_cls(title="hi", score=None)
+        assert m.title == "hi"
+
+    def test_invalid_dict_raises_validation_error(self, tmp_path: Path):
+        from pydantic import ValidationError
+        pipeline = self._inline_pipeline(
+            tmp_path,
+            "      title: str",
+        )
+        runner = PipelineRunner(pipeline)
+        schema_cls = runner._spec["steps"][0]["_schema_cls"]
+        with pytest.raises(ValidationError):
+            schema_cls()
+
+    def test_unsupported_type_raises_schema_ref_error_at_load(self, tmp_path: Path):
+        from pyconveyor.errors import SchemaRefError
+        (tmp_path / "p.j2").write_text("Extract.")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - "{}"\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            "    schema:\n"
+            "      ts: datetime\n"
+        )
+        with pytest.raises(SchemaRefError):
+            PipelineRunner(pipeline)
+
+    def test_inline_schema_run_succeeds(self, tmp_path: Path):
+        (tmp_path / "p.j2").write_text("Extract.")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"title": "My Title", "score": 42}\'\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            "    schema:\n"
+            "      title: str\n"
+            "      score: int\n"
+        )
+        rctx = PipelineRunner(pipeline).run({})
+        assert not rctx.failed
+        assert rctx.steps["extract"].value.title == "My Title"
+
+
+# ── Feature 2: schemas= kwarg ─────────────────────────────────────────────────
+
+class TestSchemasKwarg:
+    def _simple_pipeline(self, tmp_path: Path) -> Path:
+        (tmp_path / "p.j2").write_text("Extract.")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"title": "Hello", "score": 5}\'\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+        )
+        return pipeline
+
+    def test_schema_override_sets_schema_cls(self, tmp_path: Path):
+        from pydantic import BaseModel
+
+        class MyModel(BaseModel):
+            title: str
+            score: int
+
+        pipeline = self._simple_pipeline(tmp_path)
+        runner = PipelineRunner(pipeline, schemas={"extract": MyModel})
+        assert runner._spec["steps"][0]["_schema_cls"] is MyModel
+
+    def test_run_returns_mymodel_instance(self, tmp_path: Path):
+        from pydantic import BaseModel
+
+        class MyModel(BaseModel):
+            title: str
+            score: int
+
+        pipeline = self._simple_pipeline(tmp_path)
+        runner = PipelineRunner(pipeline, schemas={"extract": MyModel})
+        rctx = runner.run({})
+        assert not rctx.failed
+        assert isinstance(rctx.steps["extract"].value, MyModel)
+
+    def test_non_basemodel_raises_schema_ref_error(self, tmp_path: Path):
+        from pyconveyor.errors import SchemaRefError
+
+        pipeline = self._simple_pipeline(tmp_path)
+        with pytest.raises(SchemaRefError):
+            PipelineRunner(pipeline, schemas={"extract": str})  # type: ignore[dict-item]
+
+    def test_unknown_step_name_raises_step_config_error(self, tmp_path: Path):
+        from pydantic import BaseModel
+
+        from pyconveyor.errors import StepConfigError
+
+        class MyModel(BaseModel):
+            x: str
+
+        pipeline = self._simple_pipeline(tmp_path)
+        with pytest.raises(StepConfigError):
+            PipelineRunner(pipeline, schemas={"nonexistent": MyModel})
+
+    def test_schemas_none_changes_nothing(self, tmp_path: Path):
+        pipeline = self._simple_pipeline(tmp_path)
+        runner = PipelineRunner(pipeline, schemas=None)
+        assert runner is not None
+
+    def test_kwarg_overrides_yaml_schema(self, tmp_path: Path):
+        """schemas= kwarg wins over schema: in YAML."""
+        from pydantic import BaseModel
+
+        class Override(BaseModel):
+            title: str
+            score: int
+
+        # Pipeline already has a schema ref
+        pipeline = _runner("hello.yaml")._path.parent / "hello.yaml"
+        # Use tmp_path pipeline with existing schema key
+        (tmp_path / "p.j2").write_text("Hello.")
+        p = tmp_path / "pipeline.yaml"
+        p.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"title": "Hi", "score": 1}\'\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            "    schema:\n"
+            "      title: str\n"
+            "      score: int\n"
+        )
+        runner = PipelineRunner(p, schemas={"extract": Override})
+        assert runner._spec["steps"][0]["_schema_cls"] is Override
+
+    def test_batch_runner_accepts_schemas(self, tmp_path: Path):
+        from pydantic import BaseModel
+
+        from pyconveyor import BatchRunner
+
+        class MyModel(BaseModel):
+            title: str
+            score: int
+
+        pipeline = self._simple_pipeline(tmp_path)
+        br = BatchRunner(pipeline, schemas={"extract": MyModel})
+        assert br is not None
+
+
+# ── Feature 4: schema_hint template variable ──────────────────────────────────
+
+class TestSchemaHint:
+    def test_schema_hint_non_empty_when_schema_present(self, tmp_path: Path):
+        (tmp_path / "p.j2").write_text("{{ schema_hint }}")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"title": "Hi"}\'\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            "    schema:\n"
+            "      title: str\n"
+        )
+        from unittest.mock import patch
+
+        prompts: list[str] = []
+
+        # call_llm(client, messages, model, ...) — prompt is in messages[-1]["content"]
+        def fake_call_llm(client: object, messages: list, model: str, **kw: object) -> tuple:
+            user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
+            prompts.append(user_msg)
+            return '{"title": "Hi"}', None
+
+        with patch("pyconveyor.steps.llm_step.call_llm", fake_call_llm):
+            PipelineRunner(pipeline).run({})
+
+        assert prompts
+        assert "Return a JSON object" in prompts[0]
+
+    def test_schema_hint_empty_when_no_schema(self, tmp_path: Path):
+        (tmp_path / "p.j2").write_text("hint=[{{ schema_hint }}]")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - "raw text"\n'
+            "steps:\n"
+            "  - name: step1\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+        )
+        from unittest.mock import patch
+
+        prompts: list[str] = []
+
+        def fake_call_llm(client: object, messages: list, model: str, **kw: object) -> tuple:
+            user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
+            prompts.append(user_msg)
+            return "raw text", None
+
+        with patch("pyconveyor.steps.llm_step.call_llm", fake_call_llm):
+            PipelineRunner(pipeline).run({})
+
+        assert prompts
+        assert "hint=[]" in prompts[0]

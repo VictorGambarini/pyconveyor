@@ -184,6 +184,13 @@ def execute_llm_step(
     else:
         template_ctx.setdefault("vocab_hints", "")
 
+    # Inject schema_hint (opt-in: user must place {{ schema_hint }} in template)
+    if schema_cls is not None and "schema_hint" not in template_ctx:
+        from ..schema_builder import model_to_schema_hint
+        template_ctx["schema_hint"] = model_to_schema_hint(schema_cls)
+    else:
+        template_ctx.setdefault("schema_hint", "")
+
     if dry_run:
         log = AttemptLog(step=name, attempt=1, status="success", raw_output="[dry-run]")
         return None, [log]

@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- Inline YAML schemas: `schema:` on `llm` steps now accepts a field-map dict
+  in addition to a `module:Class` string reference.
+- `PipelineRunner(schemas={"step": MyModel})` — inject Pydantic models directly
+  from Python without a `schemas.py` file.
+- `pyconveyor schema infer` — generate a `schemas.py` stub from sample JSON output.
+- `{{ schema_hint }}` — auto-generated field description available in all prompt
+  templates when a schema is present.
+- `pyconveyor init --interactive` — guided project setup; defines fields
+  interactively and uses inline YAML schema, no `schemas.py` required.
+
+---
+
 ## [1.0.1] — 2026-05-10
 
 ### Changed
