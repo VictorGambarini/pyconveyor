@@ -7,11 +7,16 @@ from typing import Any
 import yaml
 
 
-def generate_mermaid(pipeline_path: str | Path) -> str:
+def generate_mermaid(
+    pipeline_path: str | Path,
+    step_scores: dict[str, float] | None = None,
+) -> str:
     """Generate a Mermaid flowchart from a pipeline YAML file.
 
     Args:
         pipeline_path: Path to the pipeline YAML.
+        step_scores: Optional map of step name → accuracy score (0.0–1.0).
+            When provided, each node label includes the accuracy percentage.
 
     Returns:
         Mermaid diagram as a string (suitable for embedding in Markdown).
@@ -23,7 +28,7 @@ def generate_mermaid(pipeline_path: str | Path) -> str:
     steps: list[dict[str, Any]] = spec.get("steps", [])
     lines: list[str] = ["flowchart TD"]
 
-    _add_steps(lines, steps, parent=None)
+    _add_steps(lines, steps, parent=None, step_scores=step_scores)
 
     return "\n".join(lines) + "\n"
 
@@ -33,7 +38,7 @@ def _sanitise(name: str) -> str:
     return name.replace(" ", "_").replace("-", "_").replace(".", "_")
 
 
-def _label(step: dict[str, Any]) -> str:
+def _label(step: dict[str, Any], score: float | None = None) -> str:
     stype = step.get("type", "llm")
     name = step.get("name", "?")
     model = step.get("model", "")
@@ -48,6 +53,8 @@ def _label(step: dict[str, Any]) -> str:
     if fn:
         short_fn = fn.rsplit(":", 1)[-1] if ":" in fn else fn
         parts.append(f"fn: {short_fn}")
+    if score is not None:
+        parts.append(f"accuracy: {score:.0%}")
     return "<br/>".join(parts)
 
 
@@ -70,6 +77,7 @@ def _add_steps(
     steps: list[dict[str, Any]],
     parent: str | None,
     prefix: str = "    ",
+    step_scores: dict[str, float] | None = None,
 ) -> str | None:
     """Recursively add step nodes and edges.  Returns last node name."""
     prev: str | None = parent
@@ -77,7 +85,8 @@ def _add_steps(
         stype = step.get("type", "llm")
         name = step.get("name", "step")
         node_id = _sanitise(name)
-        lbl = _label(step)
+        score = step_scores.get(name) if step_scores else None
+        lbl = _label(step, score=score)
         open_b, close_b = _node_shape(step)
 
         lines.append(f'{prefix}{node_id}{open_b}"{lbl}"{close_b}')
@@ -90,7 +99,10 @@ def _add_steps(
             lines.append(f"{prefix}subgraph {subgraph_id}[parallel: {name}]")
             last_children: list[str] = []
             for child in child_steps:
-                last = _add_steps(lines, [child], parent=None, prefix=prefix + "    ")
+                last = _add_steps(
+                    lines, [child], parent=None,
+                    prefix=prefix + "    ", step_scores=step_scores,
+                )
                 if last:
                     last_children.append(last)
             lines.append(f"{prefix}end")
@@ -105,10 +117,12 @@ def _add_steps(
             else_branch = step.get("else")
             if then_branch:
                 then_steps = then_branch if isinstance(then_branch, list) else [then_branch]
-                _add_steps(lines, then_steps, parent=node_id, prefix=prefix)
+                _add_steps(lines, then_steps, parent=node_id, prefix=prefix,
+                           step_scores=step_scores)
             if else_branch:
                 else_steps = else_branch if isinstance(else_branch, list) else [else_branch]
-                _add_steps(lines, else_steps, parent=node_id, prefix=prefix)
+                _add_steps(lines, else_steps, parent=node_id, prefix=prefix,
+                           step_scores=step_scores)
             prev = node_id
         else:
             prev = node_id
