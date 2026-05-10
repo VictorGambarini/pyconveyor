@@ -3,6 +3,7 @@
 This is the heart of pyconveyor.  You describe a workflow in YAML, point
 ``PipelineRunner`` at it, and call ``runner.run(input_data)``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,6 +36,7 @@ from .expr import (
 )
 from .llm import make_client
 from .steps.condition_step import execute_condition_step
+from .steps.ensemble_step import execute_ensemble_step
 from .steps.llm_step import AttemptLog, execute_llm_step
 from .steps.parallel_step import execute_parallel_step
 from .steps.script_step import execute_script_step
@@ -45,6 +47,7 @@ load_dotenv(override=False)  # load .env once at import time (non-invasive)
 
 
 # ── Result data classes ────────────────────────────────────────────────────────
+
 
 @dataclass
 class StepResult:
@@ -124,6 +127,7 @@ class RunSummary:
 
 # ── RunContext ─────────────────────────────────────────────────────────────────
 
+
 class RunContext:
     """Per-run state carrier.
 
@@ -191,9 +195,7 @@ class RunContext:
     def _expr_context(self) -> dict[str, Any]:
         """Build the namespace dict passed to expression evaluation."""
         # steps: _StepsProxy of raw result values
-        raw_values = {
-            name: sr.value for name, sr in self._step_results.items()
-        }
+        raw_values = {name: sr.value for name, sr in self._step_results.items()}
         return {
             "ctx": _NullSafeProxy(self._input),
             "steps": _StepsProxy(raw_values),
@@ -201,6 +203,7 @@ class RunContext:
 
 
 # ── PipelineRunner ─────────────────────────────────────────────────────────────
+
 
 class PipelineRunner:
     """Load a YAML pipeline spec and run it against input data.
@@ -343,17 +346,19 @@ class PipelineRunner:
             # Step-level condition gate (separate from 'condition' type)
             condition_expr: str | None = step.get("condition")
             if condition_expr:
-                val = resolve_value(f"{{{{ {condition_expr} }}}}", rctx._expr_context(), str(self._path))
+                val = resolve_value(
+                    f"{{{{ {condition_expr} }}}}", rctx._expr_context(), str(self._path)
+                )
                 if not val:
                     logger.info("Step '%s': condition false — skipping", name)
-                    rctx._step_results[name] = StepResult(
-                        name=name, value=None, status="skipped"
-                    )
+                    rctx._step_results[name] = StepResult(name=name, value=None, status="skipped")
                     continue
 
             try:
                 value, attempt_logs = self._execute_step(
-                    step, rctx, effective_models,
+                    step,
+                    rctx,
+                    effective_models,
                     use_cache=use_cache,
                     refresh_cache=refresh_cache,
                     dry_run=dry_run,
@@ -363,7 +368,9 @@ class PipelineRunner:
                 rctx.metadata["attempt_logs"].extend(attempt_logs)
 
                 # Count LLM calls and fire on_llm_call hooks
-                if step.get("type", "llm") == "llm" or (step.get("type") is None and "prompt" in step):
+                if step.get("type", "llm") == "llm" or (
+                    step.get("type") is None and "prompt" in step
+                ):
                     rctx._llm_calls += len(attempt_logs)
                     model_ref = step.get("model", "")
                     model_id = effective_models.get(model_ref, {}).get("model", model_ref)
@@ -401,11 +408,9 @@ class PipelineRunner:
                     logger.warning("Step '%s' failed (on_error=continue): %s", name, exc)
                     continue
                 elif on_error == "skip_remaining":
-                    logger.info(
-                        "Step '%s' failed (on_error=skip_remaining): %s", name, exc
-                    )
+                    logger.info("Step '%s' failed (on_error=skip_remaining): %s", name, exc)
                     # Mark all remaining steps as skipped
-                    remaining = steps[steps.index(step) + 1:]
+                    remaining = steps[steps.index(step) + 1 :]
                     for rem in remaining:
                         rctx._step_results[rem["name"]] = StepResult(
                             name=rem["name"], value=None, status="skipped"
@@ -435,10 +440,12 @@ class PipelineRunner:
             # Resolve vars
             resolved = self._resolve_inputs(step.get("vars", {}), expr_ctx)
             # Also provide full ctx + steps in template vars
-            resolved.update({
-                "ctx": rctx._input,
-                "steps": {n: sr.value for n, sr in rctx._step_results.items()},
-            })
+            resolved.update(
+                {
+                    "ctx": rctx._input,
+                    "steps": {n: sr.value for n, sr in rctx._step_results.items()},
+                }
+            )
             if self._vocabularies:
                 resolved["vocab"] = self._vocabularies
 
@@ -473,9 +480,12 @@ class PipelineRunner:
             return result, []
 
         elif stype == "parallel":
+
             def _exec_child(child: dict[str, Any], rctx_shared: RunContext, **kw: Any) -> Any:
                 val, logs = self._execute_step(
-                    child, rctx_shared, effective_models,
+                    child,
+                    rctx_shared,
+                    effective_models,
                     use_cache=kw.get("use_cache", True),
                     refresh_cache=kw.get("refresh_cache", False),
                     dry_run=kw.get("dry_run", False),
@@ -484,11 +494,15 @@ class PipelineRunner:
                 child_type = child.get("type", "llm")
                 if child_type == "llm" or (child_type is None and "prompt" in child):
                     child_model_ref = child.get("model", "")
-                    child_model_id = effective_models.get(child_model_ref, {}).get("model", child_model_ref)
+                    child_model_id = effective_models.get(child_model_ref, {}).get(
+                        "model", child_model_ref
+                    )
                     for al in logs:
                         if al.tokens:
                             rctx_shared._total_input_tokens += al.tokens.get("prompt_tokens", 0)
-                            rctx_shared._total_output_tokens += al.tokens.get("completion_tokens", 0)
+                            rctx_shared._total_output_tokens += al.tokens.get(
+                                "completion_tokens", 0
+                            )
                         for hook in self._hooks["on_llm_call"]:
                             try:
                                 hook(child["name"], child_model_id, al.raw_output)
@@ -510,7 +524,47 @@ class PipelineRunner:
             )
             return result_dict, []
 
+        elif stype == "ensemble":
+
+            def _exec_member(
+                member_step: dict[str, Any],
+                rctx_shared: RunContext,
+                **kw: Any,
+            ) -> tuple[Any, list[AttemptLog]]:
+                val, logs = self._execute_step(
+                    member_step,
+                    rctx_shared,
+                    effective_models,
+                    use_cache=kw.get("use_cache", use_cache),
+                    refresh_cache=kw.get("refresh_cache", refresh_cache),
+                    dry_run=kw.get("dry_run", dry_run),
+                )
+                model_ref = member_step.get("model", "")
+                model_id = effective_models.get(model_ref, {}).get("model", model_ref)
+                for al in logs:
+                    if al.tokens:
+                        rctx_shared._total_input_tokens += al.tokens.get("prompt_tokens", 0)
+                        rctx_shared._total_output_tokens += al.tokens.get("completion_tokens", 0)
+                    for hook in self._hooks["on_llm_call"]:
+                        try:
+                            hook(member_step["name"], model_id, al.raw_output)
+                        except Exception as he:
+                            logger.warning("on_llm_call hook error (ensemble): %s", he)
+                return val, logs
+
+            result, logs = execute_ensemble_step(
+                step=step,
+                rctx=rctx,
+                execute_member=_exec_member,
+                pipeline_dir=self._dir,
+                use_cache=use_cache,
+                refresh_cache=refresh_cache,
+                dry_run=dry_run,
+            )
+            return result, logs
+
         elif stype == "condition":
+
             def _eval_expr(expr: str) -> Any:
                 return resolve_value(f"{{{{ {expr} }}}}", rctx._expr_context(), str(self._path))
 
@@ -518,7 +572,9 @@ class PipelineRunner:
                 last_val = None
                 for bs in branch_steps:
                     val, logs = self._execute_step(
-                        bs, rctx_shared, effective_models,
+                        bs,
+                        rctx_shared,
+                        effective_models,
                         use_cache=use_cache,
                         refresh_cache=refresh_cache,
                         dry_run=dry_run,
@@ -614,7 +670,9 @@ class PipelineRunner:
                 vocab.add_term(suggestion.raw_value)
                 logger.info(
                     "Vocab '%s': added '%s' via policy=%s",
-                    vocab.label, suggestion.raw_value, policy
+                    vocab.label,
+                    suggestion.raw_value,
+                    policy,
                 )
 
             # Persist if configured
@@ -629,6 +687,7 @@ class PipelineRunner:
     def _resolve_persist_path(self, vocab: Any) -> Path | None:
         """Resolve the persist path for a vocabulary relative to the pipeline dir."""
         from .vocab import Vocabulary
+
         if not isinstance(vocab, Vocabulary) or not vocab.persist:
             return None
         if vocab.persist is True:
@@ -658,7 +717,9 @@ class PipelineRunner:
 
         known_str = ", ".join(sorted(vocab.known))
         denied_str = ", ".join(sorted(vocab.denied)) if vocab.denied else "none"
-        ideal_info = f" (LLM's ideal answer: '{suggestion.ideal_value}')" if suggestion.ideal_value else ""
+        ideal_info = (
+            f" (LLM's ideal answer: '{suggestion.ideal_value}')" if suggestion.ideal_value else ""
+        )
         desc_info = f"\nDescription: {vocab.description}" if vocab.description else ""
 
         prompt = (
@@ -684,13 +745,8 @@ class PipelineRunner:
 
     # ── Input resolution ───────────────────────────────────────────────────────
 
-    def _resolve_inputs(
-        self, inputs: dict[str, Any], expr_ctx: dict[str, Any]
-    ) -> dict[str, Any]:
-        return {
-            k: resolve_value(v, expr_ctx, str(self._path))
-            for k, v in inputs.items()
-        }
+    def _resolve_inputs(self, inputs: dict[str, Any], expr_ctx: dict[str, Any]) -> dict[str, Any]:
+        return {k: resolve_value(v, expr_ctx, str(self._path)) for k, v in inputs.items()}
 
     # ── Model / client helpers ─────────────────────────────────────────────────
 
@@ -780,8 +836,14 @@ class PipelineRunner:
         all_step_names: set[str] = self._collect_step_names(steps)
 
         self._validate_steps(
-            steps, file_str, model_names, parser_names, parsers,
-            callables, all_step_names, parent_path=""
+            steps,
+            file_str,
+            model_names,
+            parser_names,
+            parsers,
+            callables,
+            all_step_names,
+            parent_path="",
         )
 
         spec["_callables"] = callables
@@ -819,15 +881,18 @@ class PipelineRunner:
                     cls = self._schema_overrides[name]
                     if not (isinstance(cls, type) and issubclass(cls, BaseModel)):
                         raise SchemaRefError(
-                            f"schemas['{name}'] must be a pydantic.BaseModel subclass, "
-                            f"got {cls!r}",
+                            f"schemas['{name}'] must be a pydantic.BaseModel subclass, got {cls!r}",
                             file=file_str,
                             key_path=f"schemas['{name}']",
                         )
                     step["_schema_cls"] = cls
-                if step.get("type") == "parallel":
+                stype = step.get("type")
+                if stype == "parallel":
                     _walk(step.get("steps", []))
-                if step.get("type") == "condition":
+                elif stype == "ensemble":
+                    # Schema overrides on the ensemble apply to the ensemble itself
+                    pass
+                elif stype == "condition":
                     for branch in ("then", "else"):
                         b = step.get(branch)
                         if isinstance(b, list):
@@ -843,9 +908,16 @@ class PipelineRunner:
             n = step.get("name")
             if n:
                 names.add(n)
-            if step.get("type") == "parallel":
+            stype = step.get("type")
+            if stype == "parallel":
                 names |= self._collect_step_names(step.get("steps", []))
-            if step.get("type") == "condition":
+            elif stype == "ensemble":
+                ensemble_name = step.get("name", "")
+                for m in step.get("members", []):
+                    model_key = m.get("model", "")
+                    member_name = m.get("name", model_key)
+                    names.add(f"{ensemble_name}.{member_name}")
+            elif stype == "condition":
                 for branch_key in ("then", "else"):
                     b = step.get(branch_key)
                     if isinstance(b, list):
@@ -889,8 +961,7 @@ class PipelineRunner:
 
             if stype == "llm":
                 self._validate_llm_step(
-                    step, file_str, model_names, parser_names, parsers,
-                    key_base, all_step_names
+                    step, file_str, model_names, parser_names, parsers, key_base, all_step_names
                 )
 
             elif stype in ("transform", "io", "validate"):
@@ -906,15 +977,28 @@ class PipelineRunner:
                 except CallableImportError:
                     raise
                 except Exception as e:
-                    raise CallableImportError(str(e), file=file_str, key_path=f"{key_base}.fn") from e
+                    raise CallableImportError(
+                        str(e), file=file_str, key_path=f"{key_base}.fn"
+                    ) from e
                 # Validate inputs expressions
                 validate_all_expressions(step.get("inputs", {}), file_str, f"{key_base}.inputs")
 
             elif stype == "parallel":
                 children = step.get("steps", [])
                 self._validate_steps(
-                    children, file_str, model_names, parser_names, parsers,
-                    callables, all_step_names, f"{key_base}."
+                    children,
+                    file_str,
+                    model_names,
+                    parser_names,
+                    parsers,
+                    callables,
+                    all_step_names,
+                    f"{key_base}.",
+                )
+
+            elif stype == "ensemble":
+                self._validate_ensemble_step(
+                    step, file_str, model_names, parser_names, parsers, key_base, all_step_names
                 )
 
             elif stype == "condition":
@@ -928,8 +1012,14 @@ class PipelineRunner:
                     branch_steps = branch if isinstance(branch, list) else [branch]
                     if branch_steps and isinstance(branch_steps[0], dict):
                         self._validate_steps(
-                            branch_steps, file_str, model_names, parser_names, parsers,
-                            callables, all_step_names, f"{key_base}.{branch_key}."
+                            branch_steps,
+                            file_str,
+                            model_names,
+                            parser_names,
+                            parsers,
+                            callables,
+                            all_step_names,
+                            f"{key_base}.{branch_key}.",
                         )
 
             # Validate on_failure reference if present
@@ -976,11 +1066,14 @@ class PipelineRunner:
         if schema_ref is not None:
             if isinstance(schema_ref, dict):
                 from .schema_builder import yaml_dict_to_model
+
                 model_name = _inline_schema_name(step["name"])
                 try:
                     schema_cls = yaml_dict_to_model(model_name, schema_ref)
                 except Exception as e:
-                    raise SchemaRefError(str(e), file=file_str, key_path=f"{key_base}.schema") from e
+                    raise SchemaRefError(
+                        str(e), file=file_str, key_path=f"{key_base}.schema"
+                    ) from e
                 step["_schema_cls"] = schema_cls
             else:
                 try:
@@ -997,9 +1090,7 @@ class PipelineRunner:
             else:
                 # Try as a dotted callable
                 try:
-                    step["_parser_fn"] = import_callable(
-                        parser_ref, file_str, f"{key_base}.parser"
-                    )
+                    step["_parser_fn"] = import_callable(parser_ref, file_str, f"{key_base}.parser")
                 except CallableImportError:
                     s = suggest(parser_ref, list(parser_names))
                     raise CallableImportError(
@@ -1019,14 +1110,96 @@ class PipelineRunner:
         effective_max = step.get("max_attempts", 3 if has_schema else 1)
         effective_fb = step.get("error_feedback", has_schema)
         logger.info(
-            "Step '%s': max_attempts=%d error_feedback=%s",
-            name, effective_max, effective_fb
+            "Step '%s': max_attempts=%d error_feedback=%s", name, effective_max, effective_fb
         )
+
+    def _validate_ensemble_step(
+        self,
+        step: dict[str, Any],
+        file_str: str,
+        model_names: set[str],
+        parser_names: set[str],
+        parsers: dict[str, Any],
+        key_base: str,
+        all_step_names: set[str],
+    ) -> None:
+        name = step["name"]
+
+        # Resolve shared schema at ensemble level
+        schema_ref = step.get("schema")
+        if schema_ref is not None:
+            if isinstance(schema_ref, dict):
+                from .schema_builder import yaml_dict_to_model
+
+                try:
+                    schema_cls = yaml_dict_to_model(_inline_schema_name(name), schema_ref)
+                except Exception as e:
+                    raise SchemaRefError(
+                        str(e), file=file_str, key_path=f"{key_base}.schema"
+                    ) from e
+                step["_schema_cls"] = schema_cls
+            else:
+                schema_cls = _import_schema(schema_ref, file_str, f"{key_base}.schema")
+                step["_schema_cls"] = schema_cls
+
+        members = step.get("members", [])
+        if not members:
+            raise StepConfigError(
+                f"Ensemble step '{name}' must have at least one member",
+                file=file_str,
+                key_path=f"{key_base}.members",
+            )
+
+        for i, m in enumerate(members):
+            model_ref = m.get("model")
+            if not model_ref:
+                raise StepConfigError(
+                    f"Ensemble step '{name}': member[{i}] is missing required field 'model'",
+                    file=file_str,
+                    key_path=f"{key_base}.members[{i}].model",
+                )
+            if model_ref not in model_names:
+                s = suggest(model_ref, list(model_names))
+                raise ModelRefError(
+                    f"Ensemble step '{name}': member model '{model_ref}' is not defined. "
+                    f"Defined models: {sorted(model_names)}",
+                    file=file_str,
+                    key_path=f"{key_base}.members[{i}].model",
+                    suggestion=s,
+                )
+
+        judge_spec = step.get("judge")
+        if judge_spec is not None:
+            judge_model = judge_spec.get("model")
+            if not judge_model:
+                raise StepConfigError(
+                    f"Ensemble step '{name}': judge is missing required field 'model'",
+                    file=file_str,
+                    key_path=f"{key_base}.judge.model",
+                )
+            if judge_model not in model_names:
+                s = suggest(judge_model, list(model_names))
+                raise ModelRefError(
+                    f"Ensemble step '{name}': judge model '{judge_model}' is not defined. "
+                    f"Defined models: {sorted(model_names)}",
+                    file=file_str,
+                    key_path=f"{key_base}.judge.model",
+                    suggestion=s,
+                )
+            judge_condition = judge_spec.get("condition", "all_succeeded")
+            if judge_condition not in ("all_succeeded", "any_succeeded"):
+                raise StepConfigError(
+                    f"Ensemble step '{name}': judge.condition must be 'all_succeeded' or "
+                    f"'any_succeeded', got '{judge_condition}'",
+                    file=file_str,
+                    key_path=f"{key_base}.judge.condition",
+                )
 
 
 def _inline_schema_name(step_name: str) -> str:
     """Generate a stable class name for an inline YAML schema."""
     import re
+
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "", step_name)
     return "".join(w.capitalize() for w in safe.replace("-", "_").split("_")) + "Schema"
 

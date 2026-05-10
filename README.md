@@ -117,6 +117,7 @@ Every `llm` step validates the model's response against a schema. If validation 
 | Step type | What it does |
 |---|---|
 | `llm` | Call a model, validate output against a schema, retry on failure |
+| `ensemble` | Run N models in parallel, auto-judge and merge results |
 | `transform` | Call a Python function with step outputs as inputs |
 | `validate` | Assert a condition; fail or skip remaining steps if it's false |
 | `io` | Call a Python function for side effects (DB write, file save) |
@@ -168,6 +169,27 @@ runner = BenchmarkRunner(
 summary = runner.run()
 generate_report(summary, "report.html", pdf=True)
 ```
+
+### Ensemble steps — multi-model consensus
+
+Run N models in parallel and automatically merge their outputs with a judge model:
+
+```yaml
+steps:
+  - name: extract
+    type: ensemble
+    schema: schemas:Record
+    prompt: prompts/extract.j2
+    members:
+      - model: gpt4o
+      - model: claude
+        required: false   # pipeline continues if this model fails
+    judge:
+      model: gpt4o        # reviews all outputs and returns the merged result
+      condition: all_succeeded
+```
+
+Member results are also accessible individually as `steps.extract.gpt4o` and `steps.extract.claude`. If the judge is skipped or fails, the first succeeded member's result is returned.
 
 ### Provider support
 

@@ -1,4 +1,5 @@
 """Mermaid DAG visualisation for pipeline YAML files."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -68,6 +69,7 @@ def _node_shape(step: dict[str, Any]) -> tuple[str, str]:
         "validate": ("{{", "}}"),
         "parallel": ("[(", ")]"),
         "condition": ("{", "}"),
+        "ensemble": ("[[", "]]"),
     }
     return shapes.get(stype, ("[", "]"))
 
@@ -100,8 +102,11 @@ def _add_steps(
             last_children: list[str] = []
             for child in child_steps:
                 last = _add_steps(
-                    lines, [child], parent=None,
-                    prefix=prefix + "    ", step_scores=step_scores,
+                    lines,
+                    [child],
+                    parent=None,
+                    prefix=prefix + "    ",
+                    step_scores=step_scores,
                 )
                 if last:
                     last_children.append(last)
@@ -112,17 +117,40 @@ def _add_steps(
                 pass
             prev = node_id
 
+        elif stype == "ensemble":
+            members: list[dict[str, Any]] = step.get("members", [])
+            judge: dict[str, Any] | None = step.get("judge")
+            subgraph_id = f"sub_{node_id}"
+            lines.append(f"{prefix}subgraph {subgraph_id}[ensemble: {name}]")
+            for m in members:
+                model_key = m.get("model", "?")
+                member_name = m.get("name", model_key)
+                m_id = _sanitise(f"{name}_{member_name}")
+                req_label = "" if m.get("required", True) else " (optional)"
+                lines.append(
+                    f'{prefix}    {m_id}["{name}.{member_name}<br/>{model_key}{req_label}"]'
+                )
+            if judge:
+                j_id = _sanitise(f"{name}_judge")
+                j_model = judge.get("model", "?")
+                j_cond = judge.get("condition", "all_succeeded")
+                lines.append(f'{prefix}    {j_id}("{name}._judge<br/>{j_model}<br/>if {j_cond}")')
+            lines.append(f"{prefix}end")
+            prev = node_id
+
         elif stype == "condition":
             then_branch = step.get("then")
             else_branch = step.get("else")
             if then_branch:
                 then_steps = then_branch if isinstance(then_branch, list) else [then_branch]
-                _add_steps(lines, then_steps, parent=node_id, prefix=prefix,
-                           step_scores=step_scores)
+                _add_steps(
+                    lines, then_steps, parent=node_id, prefix=prefix, step_scores=step_scores
+                )
             if else_branch:
                 else_steps = else_branch if isinstance(else_branch, list) else [else_branch]
-                _add_steps(lines, else_steps, parent=node_id, prefix=prefix,
-                           step_scores=step_scores)
+                _add_steps(
+                    lines, else_steps, parent=node_id, prefix=prefix, step_scores=step_scores
+                )
             prev = node_id
         else:
             prev = node_id

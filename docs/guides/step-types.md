@@ -1,10 +1,11 @@
 # Step Types
 
-pyconveyor has six step types. Each serves a distinct role in the pipeline.
+pyconveyor has seven step types. Each serves a distinct role in the pipeline.
 
 | Type | Purpose |
 |---|---|
 | `llm` | Call a language model, parse the response, validate against a schema |
+| `ensemble` | Run N models in parallel, auto-judge and merge results |
 | `transform` | Pure Python function — no side effects |
 | `validate` | Gate: abort the pipeline if a condition isn't met |
 | `io` | Side effects — file writes, database calls, network requests |
@@ -59,6 +60,101 @@ raw_response (str)
 - **`schema:`** validates the parsed dict. The step's result is the validated model instance, not the raw dict.
 
 When `schema:` is set and validation fails, pyconveyor retries and feeds the error back to the model. See [Validation Feedback](validation-feedback.md).
+
+---
+
+## `ensemble`
+
+Runs N LLM members in parallel, then optionally runs a judge model to merge the results. This is the cleanest way to implement multi-model consensus extraction — no manual `parallel` + `transform` glue needed.
+
+```yaml
+steps:
+  - name: extract
+    type: ensemble
+    schema: schemas:Record
+    prompt: prompts/extract.j2
+    members:
+      - model: gpt4o
+      - model: claude
+        required: false
+    judge:
+      model: gpt4o
+      condition: all_succeeded
+```
+
+### How it works
+
+1. All members run in parallel (thread pool, one thread per member)
+2. If `judge:` is set and its condition is met, the judge sees all member outputs and returns a merged result
+3. If the judge is skipped (condition not met, or only one member succeeded) or fails, the first succeeded member's result is returned
+4. If a required member fails, the pipeline aborts
+
+### Key fields
+
+| Field | Required | Description |
+|---|---|---|
+| `members` | yes | List of member definitions (at least one) |
+| `prompt` | no | Jinja2 template shared by all members |
+| `schema` | no | Pydantic model shared by all members and the judge |
+| `judge` | no | Judge configuration (see below) |
+
+Each member can override the shared prompt and add per-member LLM tuning fields (`temperature`, `max_attempts`, `vars`, etc.):
+
+```yaml
+members:
+  - model: gpt4o
+    name: primary
+  - model: claude
+    name: reviewer
+    required: false
+    prompt: prompts/extract_alt.j2    # override the shared prompt
+    temperature: 0.0
+    max_attempts: 2
+```
+
+### Judge configuration
+
+| Field | Default | Description |
+|---|---|---|
+| `model` | required | Model key from the `models:` block |
+| `condition` | `all_succeeded` | `all_succeeded` — judge runs only if every required member succeeded; `any_succeeded` — runs as long as two or more members succeeded |
+| `prompt` | auto | Custom Jinja2 template for the judge. If omitted, the shared member prompt is extended with a built-in merge instruction |
+
+The built-in judge prompt appends this to the rendered member prompt:
+
+> The above prompt was sent independently to N model(s). Here are their outputs: [outputs]. Your task: Review all outputs carefully. Return a single merged JSON result that best represents the correct answer.
+
+### Accessing individual member results
+
+Each member's result is stored in `RunContext.steps` under `{ensemble_name}.{member_name}`:
+
+```python
+result = runner.run(input_data)
+result.steps["extract"].value           # merged (judge or first-member fallback)
+result.steps["extract.primary"].value   # gpt4o result
+result.steps["extract.reviewer"].value  # claude result (None if failed)
+```
+
+Or in downstream step expressions:
+
+```yaml
+- name: audit
+  type: transform
+  fn: steps:compare
+  inputs:
+    primary:  "{{ steps.extract.primary }}"
+    reviewer: "{{ steps.extract.reviewer }}"
+```
+
+### Fallback behaviour
+
+| Situation | What happens |
+|---|---|
+| Judge runs and succeeds | Judge result is returned |
+| Judge is skipped (condition not met, or only 1 succeeded) | First succeeded member result returned |
+| Judge fails (parse error, timeout, etc.) | Logged as warning; first succeeded member result returned |
+| A required member fails | `RuntimeError` raised; pipeline aborts |
+| All optional members fail, no required members | `None` returned |
 
 ---
 

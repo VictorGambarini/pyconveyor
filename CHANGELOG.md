@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] — 2026-05-11
+
+### Added
+- `type: ensemble` step — run N LLM members in parallel, auto-judge and merge
+  results if all required members succeed, fall back to the best available member
+  otherwise.
+  - Ensemble-level `prompt:` and `schema:` are shared by all members; individual
+    members can override `prompt:` locally.
+  - `judge:` block with `model:`, optional `prompt:`, `condition:` (`all_succeeded`
+    or `any_succeeded`), and all standard LLM tuning fields (`temperature`, etc.).
+  - Built-in judge prompt: appends a structured merge instruction to the rendered
+    member prompt. Fully overridable via `judge.prompt`.
+  - Member results accessible as `steps.{ensemble}.{member}` in downstream
+    expressions.
+  - Mermaid graph renders ensemble as a labelled subgraph with member and judge
+    nodes.
+  - 23 tests covering load validation, happy path, fallback behaviour, and graph
+    rendering.
+
+---
+
 ## [1.2.0] — 2026-05-10
 
 ### Added

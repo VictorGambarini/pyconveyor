@@ -164,6 +164,72 @@ print(f"Classification: {final.classification} (confidence: {final.confidence})"
 
 ---
 
+## Ensemble extraction with auto-judge
+
+Run two models in parallel and let a third model merge their outputs into one result. No glue code needed.
+
+**`schemas.py`**
+```python
+from pydantic import BaseModel
+from typing import Optional
+
+class Extraction(BaseModel):
+    classification: str
+    confidence: float
+    notes: Optional[str] = None
+```
+
+**`pipeline.yaml`**
+```yaml
+models:
+  gpt4o:
+    provider: openai_compat
+    api_key:  ${OPENAI_API_KEY}
+    model:    gpt-4o
+    timeout:  120
+
+  claude:
+    provider: anthropic
+    api_key:  ${ANTHROPIC_API_KEY}
+    model:    claude-opus-4-7
+    timeout:  120
+
+steps:
+  - name: extract
+    type: ensemble
+    schema: schemas:Extraction
+    prompt: prompts/classify.j2
+    members:
+      - model: gpt4o
+        name: primary
+      - model: claude
+        name: reviewer
+        required: false      # pipeline continues if this model is unavailable
+    judge:
+      model: gpt4o
+      condition: all_succeeded   # only merge when both models returned results
+```
+
+**`run.py`**
+```python
+from pyconveyor import PipelineRunner
+
+runner = PipelineRunner("pipeline.yaml")
+result = runner.run({"document": "..."})
+
+# The merged result (judge output, or first-member fallback)
+final = result.steps["extract"].value
+print(f"Classification: {final.classification} (confidence: {final.confidence})")
+
+# Individual member results are also available
+primary  = result.steps["extract.primary"].value
+reviewer = result.steps["extract.reviewer"].value
+```
+
+Compare this to the [Dual-model reconciliation](#dual-model-reconciliation) example above, which requires a separate `transform` step for merging. `ensemble` handles the merge automatically.
+
+---
+
 ## Multi-stage pipeline with error handling
 
 A three-step pipeline: extract → validate → save. The save step runs even if validation produces warnings.

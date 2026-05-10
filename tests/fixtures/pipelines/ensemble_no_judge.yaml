@@ -1,0 +1,22 @@
+# Ensemble without a judge — returns first member result.
+
+models:
+  primary:
+    provider: mock
+    model: mock-primary
+    mock_responses:
+      - '{"message": "Hola!", "language": "Spanish"}'
+  reviewer:
+    provider: mock
+    model: mock-reviewer
+    mock_responses:
+      - '{"message": "Hello!", "language": "English"}'
+
+steps:
+  - name: extract
+    type: ensemble
+    schema: tests.fixtures.schemas:Greeting
+    prompt: greet.j2
+    members:
+      - model: primary
+      - model: reviewer
