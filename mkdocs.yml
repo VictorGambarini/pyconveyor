@@ -54,6 +54,7 @@ nav:
     - Validation Feedback: guides/validation-feedback.md
     - Expression Language: guides/expressions.md
     - Batch Processing: guides/batch.md
+    - Benchmarking: guides/benchmarking.md
     - Hooks: guides/hooks.md
     - Vocabulary Fields: guides/vocab.md
     - Response Caching: guides/caching.md

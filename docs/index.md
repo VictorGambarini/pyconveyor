@@ -8,33 +8,23 @@ pyconveyor lets you describe an extraction workflow in YAML, write prompts in Ji
 pip install pyconveyor
 ```
 
-```yaml
-# pipeline.yaml
-models:
-  default:
-    provider: openai_compat
-    base_url: ${OPENAI_BASE_URL}
-    api_key:  ${OPENAI_API_KEY}
-    model:    gpt-4o-mini
+---
 
-steps:
-  - name: extract
-    type: llm
-    model: default
-    prompt: prompts/extract.j2
-    schema: schemas:ExtractionResult
-    max_attempts: 3
+## Get started in 60 seconds
+
+```bash
+# 1. Bootstrap a project (interactive — no Python files needed)
+pyconveyor init my_pipeline/ --interactive
+cd my_pipeline/
+
+# 2. Set your API key
+export OPENAI_API_KEY=sk-...
+
+# 3. Run
+pyconveyor run pipeline.yaml --input '{"document": "Invoice from Acme Corp…"}'
 ```
 
-```python
-from pyconveyor import PipelineRunner
-
-runner = PipelineRunner("pipeline.yaml")
-result = runner.run({"document": "Full text here…"})
-
-if not result.failed:
-    print(result.steps["extract"].value)
-```
+Or go deeper with the **[Quickstart guide →](quickstart.md)**
 
 ---
 
@@ -55,11 +45,14 @@ pyconveyor makes **reproducible extraction, reliable retries, schema-safe output
 
 | Feature | What it means |
 |---|---|
-| **YAML as a versioned API** | Breaking schema changes require a semver major bump |
+| **YAML-first** | The whole pipeline — models, steps, schemas, prompts — lives in one YAML file |
+| **CLI-first** | `pyconveyor init`, `run`, `batch`, `benchmark` — no Python needed to get started |
 | **OpenAI-compat-first** | Works with Ollama, vLLM, LM Studio, and any hosted endpoint |
+| **Self-correcting retries** | Schema and parse errors are fed back to the model so it can fix itself |
+| **Benchmarking built in** | Compare pipeline versions against golden-standard cases; get per-step accuracy |
+| **HTML/PDF reports** | One command produces a shareable report with tables, graphs, and charts |
 | **Extraction-focused** | Optimised for classification, annotation, and structured record extraction |
 | **Explicit DAG** | Every step, dependency, and control flow branch is visible in one YAML file |
-| **Self-correcting retries** | Schema and parse errors are fed back to the model so it can fix itself |
 | **Comprehensible in one sitting** | The entire runner is one file; the YAML format has a one-page reference |
 
 ---
@@ -74,10 +67,23 @@ pyconveyor is: `deterministic`, `reproducible`, `schema-driven`, `extraction pip
 
 ## Navigation
 
+**Getting started**
+
 - **[Quickstart](quickstart.md)** — up and running in 5 minutes
 - **[Concepts](concepts.md)** — how pipelines, steps, and context fit together
+
+**Guides**
+
 - **[Step Types](guides/step-types.md)** — `llm`, `transform`, `validate`, `io`, `parallel`, `condition`
 - **[Validation Feedback](guides/validation-feedback.md)** — self-correcting retry loops
+- **[Batch Processing](guides/batch.md)** — process thousands of documents in parallel
+- **[Benchmarking](guides/benchmarking.md)** — measure accuracy, compare pipelines, generate reports
+- **[Vocabulary Fields](guides/vocab.md)** — constrained extraction with fuzzy matching
+- **[Response Caching](guides/caching.md)** — speed up development with cached LLM responses
+- **[Providers](guides/providers.md)** — OpenAI, Anthropic, Ollama, custom providers
+- **[Hooks](guides/hooks.md)** — callbacks for observability and side effects
+
+**Reference**
+
 - **[YAML Schema](reference/schema.md)** — every field, type, and default
-- **[CLI Reference](reference/cli.md)** — `init`, `run`, `validate`, `schema`, `visualise`
-- **[Examples](examples.md)** — single-step extraction, dual-model reconciliation
+- **[CLI Reference](reference/cli.md)** — `init`, `run`, `batch`, `validate`, `schema`, `benchmark`, `visualise`, `vocab review`
