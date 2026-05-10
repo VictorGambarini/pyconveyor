@@ -226,7 +226,10 @@ def resolve_value(
     stripped = value.strip()
     m = _EXPR_RE.fullmatch(stripped)
     if m:
-        return evaluate_expression(m.group(1).strip(), context, file, key_path)
+        result = evaluate_expression(m.group(1).strip(), context, file, key_path)
+        if isinstance(result, _NullSafeProxy):
+            result = result._unwrap()
+        return result
 
     # Inline substitutions inside a larger string
     def _sub(match: re.Match) -> str:  # type: ignore[type-arg]

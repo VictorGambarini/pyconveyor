@@ -19,14 +19,31 @@ class PromptRenderError(PyConveyorError):
     """Raised when a Jinja2 template cannot be rendered."""
 
 
+def _tojson(value: Any, indent: int | None = None) -> str:
+    import json as _json
+    from pydantic import BaseModel
+
+    if isinstance(value, BaseModel):
+        return value.model_dump_json(indent=indent)
+    if isinstance(value, list):
+        items = [
+            _json.loads(v.model_dump_json()) if isinstance(v, BaseModel) else v
+            for v in value
+        ]
+        return _json.dumps(items, indent=indent, ensure_ascii=False)
+    return _json.dumps(value, indent=indent, ensure_ascii=False)
+
+
 def _make_env(template_dir: str | Path) -> Environment:
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(template_dir)),
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
+    env.filters["tojson"] = _tojson
+    return env
 
 
 def render_prompt(
