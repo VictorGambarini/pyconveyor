@@ -454,6 +454,28 @@ class TestCliSchemaInfer:
         parsed = json.loads(output)
         assert "properties" in parsed
 
+    def test_schema_infer_step_override(self, tmp_path: Path) -> None:
+        pipeline = self._simple_pipeline(tmp_path)
+        sample = tmp_path / "sample.json"
+        sample.write_text('{"score": 42}')
+        code, output = _run_cli(
+            "schema", "infer", str(pipeline), "--sample", str(sample),
+            "--step", "my_custom_step",
+        )
+        assert code == 0
+        assert "class MyCustomStepSchema(BaseModel):" in output
+
+    def test_first_llm_step_name_exception_returns_extract(self, tmp_path: Path) -> None:
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("not: [valid: yaml: [\n")  # invalid YAML → exception path
+        sample = tmp_path / "sample.json"
+        sample.write_text('{"title": "x"}')
+        code, output = _run_cli(
+            "schema", "infer", str(pipeline), "--sample", str(sample),
+        )
+        assert code == 0
+        assert "class ExtractSchema(BaseModel):" in output
+
 
 # ── Feature 5: interactive init — CLI tests ───────────────────────────────────
 
@@ -544,4 +566,29 @@ class TestCliInitInteractive:
         assert code == 0
         assert (target / "schemas.py").exists()
         assert (target / "pipeline.yaml").exists()
+
+    def test_unknown_provider_choice_falls_back_to_openai(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            ["docs", "title:str", "", "99"],  # 99 is not a valid choice → defaults to OpenAI
+        )
+        assert code == 0
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "provider: openai" in text or "provider: openai_compat" in text
+
+    def test_field_without_colon_is_skipped(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            [
+                "docs",
+                "nocoion",   # no colon → skipped
+                "title:str",
+                "",
+                "1",
+            ],
+        )
+        assert code == 0
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "title: str" in text
+        assert "nocoion" not in text
 

@@ -95,3 +95,16 @@ class TestInferSchemaSource:
     def test_mixed_list_produces_list_any(self):
         src = infer_schema_source("MySchema", {"items": [1, "two"]})
         assert "list[Any]" in src
+
+    def test_list_of_bools(self):
+        src = infer_schema_source("MySchema", {"flags": [True, False]})
+        assert "flags: list[bool]" in src
+
+    def test_list_of_dicts_produces_list_any(self):
+        src = infer_schema_source("MySchema", {"records": [{"a": 1}, {"b": 2}]})
+        assert "list[Any]" in src
+
+    def test_empty_sample_produces_pass_body(self):
+        src = infer_schema_source("Empty", {})
+        assert "class Empty(BaseModel):" in src
+        assert "pass" in src

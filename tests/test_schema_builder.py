@@ -1,11 +1,17 @@
 """Tests for schema_builder: yaml_dict_to_model and model_to_schema_hint."""
 from __future__ import annotations
 
+import typing
+
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from pyconveyor.errors import SchemaRefError
-from pyconveyor.schema_builder import model_to_schema_hint, yaml_dict_to_model
+from pyconveyor.schema_builder import (
+    _type_to_description,
+    model_to_schema_hint,
+    yaml_dict_to_model,
+)
 
 
 # ── yaml_dict_to_model ────────────────────────────────────────────────────────
@@ -127,6 +133,14 @@ class TestYamlDictToModel:
         M = yaml_dict_to_model("M", {"x": "str|None"})
         assert M().x is None
 
+    def test_list_unsupported_inner_type_raises(self):
+        with pytest.raises(SchemaRefError):
+            yaml_dict_to_model("M", {"items": "list[datetime]"})
+
+    def test_dict_non_str_key_raises(self):
+        with pytest.raises(SchemaRefError):
+            yaml_dict_to_model("M", {"m": "dict[int, str]"})
+
 
 # ── model_to_schema_hint ──────────────────────────────────────────────────────
 
@@ -178,3 +192,25 @@ class TestModelToSchemaHint:
         M = yaml_dict_to_model("M", {"x": "str"})
         hint = model_to_schema_hint(M)
         assert hint.startswith("Return a JSON object with the following fields:")
+
+
+# ── _type_to_description edge cases ──────────────────────────────────────────
+
+class TestTypeToDescription:
+    def test_typing_any_returns_any_value(self):
+        assert _type_to_description(typing.Any) == "any value"
+
+    def test_unknown_annotation_returns_any_value(self):
+        class _Exotic:
+            pass
+        assert _type_to_description(_Exotic) == "any value"
+
+    def test_model_to_schema_hint_exception_guard_returns_empty(self):
+        from unittest.mock import patch
+
+        class GoodModel(BaseModel):
+            x: str
+
+        # Patch issubclass to raise, triggering the except Exception guard
+        with patch("builtins.issubclass", side_effect=TypeError("simulated failure")):
+            assert model_to_schema_hint(GoodModel) == ""

@@ -699,3 +699,104 @@ class TestSchemaHint:
 
         assert prompts
         assert "hint=[]" in prompts[0]
+
+    def test_schema_hint_not_overwritten_when_in_resolved_inputs(self, tmp_path: Path):
+        """User-provided schema_hint in template vars is preserved, not overwritten."""
+        (tmp_path / "p.j2").write_text("hint=[{{ schema_hint }}]")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"title": "Hi"}\'\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            "    schema:\n"
+            "      title: str\n"
+            "    vars:\n"
+            "      schema_hint: MY_CUSTOM_HINT\n"
+        )
+        from unittest.mock import patch
+
+        prompts: list[str] = []
+
+        def fake_call_llm(client: object, messages: list, model: str, **kw: object) -> tuple:
+            user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
+            prompts.append(user_msg)
+            return '{"title": "Hi"}', None
+
+        with patch("pyconveyor.steps.llm_step.call_llm", fake_call_llm):
+            PipelineRunner(pipeline).run({})
+
+        assert prompts
+        assert "MY_CUSTOM_HINT" in prompts[0]
+
+
+# ── schemas= kwarg walking into parallel/condition children ───────────────────
+
+class TestSchemasKwargChildWalking:
+    def test_schemas_targets_parallel_child(self, tmp_path: Path):
+        """schemas= kwarg applies to a step nested inside a parallel step."""
+        from pydantic import BaseModel
+
+        class ChildSchema(BaseModel):
+            value: int
+
+        (tmp_path / "p.j2").write_text("Extract.")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"value": 1}\'\n'
+            "steps:\n"
+            "  - name: par\n"
+            "    type: parallel\n"
+            "    steps:\n"
+            "      - name: child\n"
+            "        type: llm\n"
+            "        model: default\n"
+            "        prompt: p.j2\n"
+        )
+        runner = PipelineRunner(pipeline, schemas={"child": ChildSchema})
+        # Verify _schema_cls was injected into the child step
+        child_step = runner._spec["steps"][0]["steps"][0]
+        assert child_step["_schema_cls"] is ChildSchema
+
+    def test_schemas_targets_condition_branch_step(self, tmp_path: Path):
+        """schemas= kwarg applies to a step nested inside a condition's then branch."""
+        from pydantic import BaseModel
+
+        class BranchSchema(BaseModel):
+            result: str
+
+        (tmp_path / "p.j2").write_text("Extract.")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"result": "ok"}\'\n'
+            "steps:\n"
+            "  - name: gate\n"
+            "    type: condition\n"
+            "    condition: \"True\"\n"
+            "    then:\n"
+            "      - name: branch_step\n"
+            "        type: llm\n"
+            "        model: default\n"
+            "        prompt: p.j2\n"
+        )
+        runner = PipelineRunner(pipeline, schemas={"branch_step": BranchSchema})
+        # Verify _schema_cls was injected into the then-branch step
+        then_steps = runner._spec["steps"][0]["then"]
+        assert then_steps[0]["_schema_cls"] is BranchSchema
