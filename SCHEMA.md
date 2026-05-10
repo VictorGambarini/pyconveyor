@@ -87,7 +87,7 @@ All step types share these fields:
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `name` | string | yes | — | Unique identifier for this step. Referenced in expressions as `steps.<name>`. |
-| `type` | string | no | `llm` | One of `llm`, `transform`, `io`, `validate`, `parallel`, `condition` |
+| `type` | string | no | `llm` | One of `llm`, `ensemble`, `transform`, `io`, `validate`, `parallel`, `condition` |
 | `condition` | expression | no | — | Skip this step if expression evaluates falsy |
 | `on_error` | string | no | `raise` | One of `raise`, `continue`, `skip_remaining` |
 | `on_failure` | string | no | — | Dotted import path `module:fn` called on error: `fn(step_name, exc, rctx)` |
@@ -124,6 +124,84 @@ steps:
     max_attempts: 3
     vars:
       focus: "{{ ctx.focus_area }}"
+```
+
+---
+
+## Ensemble step (`type: ensemble`)
+
+Runs N LLM members in parallel. If a judge is configured and its condition is met, the judge merges all outputs into a single result. Falls back to the first succeeded member if the judge is skipped or fails.
+
+### Ensemble-level fields
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `members` | list | yes | — | At least one member definition (see below) |
+| `prompt` | string | no | — | Jinja2 template shared by all members (each member can override) |
+| `schema` | string | no | — | `module:ClassName` Pydantic model shared by all members and the judge |
+| `judge` | map | no | — | Judge configuration (see below) |
+
+### Member fields (each item under `members:`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `model` | string | yes | — | Must match a key under `models:` |
+| `name` | string | no | model key | Display name; also the key for `steps.{ensemble}.{name}` |
+| `required` | boolean | no | `true` | If `false`, member failure is non-fatal |
+| `prompt` | string | no | — | Overrides the ensemble-level prompt for this member |
+| `temperature` | float | no | — | Per-member sampling temperature |
+| `top_p` | float | no | — | Per-member nucleus sampling |
+| `max_tokens` | integer | no | — | Per-member token limit |
+| `seed` | integer | no | — | Per-member random seed |
+| `max_attempts` | integer | no | — | Per-member retry budget |
+| `error_feedback` | boolean | no | — | Per-member error feedback toggle |
+| `retry_hint` | string | no | — | Per-member retry hint |
+| `schema_strict` | boolean | no | — | Per-member strict schema validation |
+| `retry_on` | list[string] | no | — | Per-member retry triggers |
+| `max_feedback_tokens` | integer | no | — | Per-member feedback token cap |
+| `vars` | map | no | — | Per-member extra template variables |
+| `system` | string | no | — | Per-member system message |
+
+### Judge fields (under `judge:`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `model` | string | yes | — | Must match a key under `models:` |
+| `condition` | string | no | `all_succeeded` | `all_succeeded` or `any_succeeded` |
+| `prompt` | string | no | — | Jinja2 template for the judge. If omitted, the member prompt is auto-extended with a built-in merge instruction |
+| `temperature` | float | no | — | Judge sampling temperature |
+| `max_attempts` | integer | no | — | Judge retry budget |
+| `system` | string | no | — | Judge system message |
+| `schema_strict` | boolean | no | — | Judge strict schema validation |
+
+**Condition values:**
+- `all_succeeded` — judge only runs when every required member succeeds
+- `any_succeeded` — judge runs as long as at least two members succeeded
+
+**Example:**
+```yaml
+steps:
+  - name: extract
+    type: ensemble
+    schema: schemas:Record
+    prompt: prompts/extract.j2
+    members:
+      - model: gpt4o
+      - model: claude
+        required: false
+    judge:
+      model: gpt4o
+      condition: all_succeeded
+```
+
+Access individual member results downstream:
+```yaml
+  - name: verify
+    type: transform
+    fn: steps:verify
+    inputs:
+      primary:  "{{ steps.extract.gpt4o }}"
+      reviewer: "{{ steps.extract.claude }}"
 ```
 
 ---

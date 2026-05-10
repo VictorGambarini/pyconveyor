@@ -87,7 +87,7 @@ An ordered list of steps. Steps execute top-to-bottom. Each step has a `name` (u
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | required | Unique step identifier. Used in expressions as `steps.<name>` |
-| `type` | string | `llm` | `llm` \| `transform` \| `validate` \| `io` \| `parallel` \| `condition` |
+| `type` | string | `llm` | `llm` \| `ensemble` \| `transform` \| `validate` \| `io` \| `parallel` \| `condition` |
 | `required` | boolean | `true` | If `false`, step failure is tolerated |
 | `on_error` | string | `raise` | `raise` \| `continue` \| `skip_remaining` |
 | `on_failure` | string | — | `module:function` called with `(step_name, exception, rctx)` on failure |
@@ -127,6 +127,40 @@ An ordered list of steps. Steps execute top-to-bottom. Each step has a `name` (u
 | `timeout` | Request exceeded `timeout` |
 | `http_error` | Provider 5xx |
 | `rate_limit` | Provider 429 |
+
+---
+
+### `ensemble` step fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `members` | array | required | At least one member definition |
+| `prompt` | string | — | Shared Jinja2 template path; inherited by all members unless overridden |
+| `schema` | string | — | `module:ClassName` Pydantic model shared by all members and the judge |
+| `judge` | object | — | Judge configuration (see below) |
+
+**Member fields** (each item in `members:`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | required | Name from the `models:` block |
+| `name` | string | model key | Member name; accessible as `steps.{ensemble}.{name}` |
+| `required` | boolean | `true` | If `false`, member failure does not abort the ensemble |
+| `prompt` | string | — | Overrides the ensemble-level prompt for this member |
+| `temperature` | number | model default | Per-member override |
+| `max_attempts` | integer | model default | Per-member retry budget |
+| `vars` | object | — | Per-member extra template variables |
+| `system` | string | — | Per-member system message |
+| `seed`, `top_p`, `max_tokens`, `max_feedback_tokens`, `retry_hint`, `schema_strict`, `retry_on`, `error_feedback` | various | — | Same as `llm` step |
+
+**Judge fields** (under `judge:`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | required | Name from the `models:` block |
+| `condition` | string | `all_succeeded` | `all_succeeded` — run only when all required members succeeded; `any_succeeded` — run when two or more members succeeded |
+| `prompt` | string | auto | Jinja2 template for the judge. If omitted, the shared member prompt is auto-extended with a built-in merge instruction |
+| `temperature`, `max_attempts`, `system`, `schema_strict`, `max_feedback_tokens`, `retry_on`, `error_feedback` | various | — | Same as `llm` step |
 
 ---
 
