@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] — 2026-05-10
+
+### Added
+- `BenchmarkRunner` — run one or more pipelines against a directory of golden-standard
+  cases (`input.json` + `expected.json`) and get per-step accuracy scores.
+- Field-level scoring for Pydantic model outputs: each field is compared independently
+  and averaged into a step score (0.0–1.0). Custom comparator callables can override
+  per-field equality (e.g. case-insensitive string match).
+- `BenchmarkSummary`, `PipelineBenchmarkResult`, `CaseResult`, `StepScore`, `FieldScore`
+  data classes for programmatic result inspection.
+- `generate_report()` — produce a self-contained HTML benchmark report with:
+  overall summary table, per-step accuracy table, pipeline comparison delta view,
+  Mermaid pipeline graph annotated with accuracy percentages, Chart.js bar charts,
+  per-case collapsible breakdown, and optional LLM attempt logs.
+- Report section control: pass `sections=[...]` to include or exclude any section;
+  default omits `attempt_logs` (noisy) but includes everything else.
+- PDF export: `generate_report(..., pdf=True)` writes a PDF alongside the HTML via
+  WeasyPrint (optional dependency).
+- `generate_mermaid(..., step_scores={...})` — annotate each pipeline node with its
+  benchmark accuracy percentage.
+- `pyconveyor benchmark` CLI command: run benchmarks from the terminal, print a
+  console summary, and write the HTML report to a configurable path.
+- `BenchmarkRunner`, `generate_report`, and related classes are now part of the
+  public API in `pyconveyor.__init__`.
+
+---
+
 ## [1.1.0] — 2026-05-10
 
 ### Added

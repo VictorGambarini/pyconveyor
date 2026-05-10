@@ -76,6 +76,52 @@ def main() -> None:
     p_vis.add_argument("pipeline", help="Path to pipeline.yaml")
     p_vis.add_argument("--output", "-o", help="Output file (default: stdout)")
 
+    # benchmark
+    p_bench = sub.add_parser(
+        "benchmark",
+        help="Run benchmark cases against one or more pipelines and generate a report",
+    )
+    p_bench.add_argument("benchmark_dir", help="Directory containing benchmark cases")
+    p_bench.add_argument(
+        "--pipeline", "-p",
+        dest="pipelines",
+        metavar="PIPELINE",
+        action="append",
+        required=True,
+        help="Pipeline YAML file to benchmark (repeat for multiple)",
+    )
+    p_bench.add_argument(
+        "--report", "-r",
+        default="benchmark_report.html",
+        help="Output HTML report path (default: benchmark_report.html)",
+    )
+    p_bench.add_argument(
+        "--pdf",
+        action="store_true",
+        help="Also write a PDF alongside the HTML report (requires WeasyPrint)",
+    )
+    p_bench.add_argument(
+        "--sections",
+        default=None,
+        help=(
+            "Comma-separated list of sections to include. "
+            "Available: overall_summary, per_step_accuracy, pipeline_comparison, "
+            "mermaid_graph, plots, per_case_breakdown, attempt_logs. "
+            "Default: all except attempt_logs."
+        ),
+    )
+    p_bench.add_argument(
+        "--pass-threshold",
+        type=float,
+        default=1.0,
+        help="Minimum score to count a case as passed (default: 1.0)",
+    )
+    p_bench.add_argument(
+        "--title",
+        default="Pipeline Benchmark Report",
+        help="Report title",
+    )
+
     # vocab
     p_vocab = sub.add_parser("vocab", help="Vocabulary management commands")
     vocab_sub = p_vocab.add_subparsers(dest="vocab_command", required=True)
@@ -106,6 +152,8 @@ def main() -> None:
             _cmd_schema(args)
     elif args.command in ("visualise", "visualize"):
         _cmd_visualise(args)
+    elif args.command == "benchmark":
+        _cmd_benchmark(args)
     elif args.command == "vocab":
         if args.vocab_command == "review":
             _cmd_vocab_review(args)
@@ -503,6 +551,53 @@ def _print_run_instructions(target: Path, provider_block: str) -> None:
         key_hint = "export OPENAI_API_KEY=sk-..."
     print(f"\nRun:\n  cd {target}/\n  {key_hint}")
     print('  pyconveyor run pipeline.yaml --input \'{"document": "..."}\'')
+
+
+# ── benchmark ─────────────────────────────────────────────────────────────────
+
+def _cmd_benchmark(args: Any) -> None:
+    from .benchmark import BenchmarkRunner
+    from .report import generate_report
+
+    benchmark_dir = Path(args.benchmark_dir)
+    if not benchmark_dir.exists():
+        print(f"Error: benchmark directory not found: {benchmark_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    sections: list[str] | None = None
+    if args.sections:
+        sections = [s.strip() for s in args.sections.split(",") if s.strip()]
+
+    runner = BenchmarkRunner(
+        benchmark_dir=benchmark_dir,
+        pipelines=args.pipelines,
+        pass_threshold=args.pass_threshold,
+    )
+    summary = runner.run()
+
+    # Print a quick console summary
+    print(f"\nBenchmark complete — {len(summary.case_names)} cases")
+    for pr in summary.pipelines:
+        label = Path(pr.pipeline_path).name
+        ok = sum(1 for c in pr.cases if c.status == "ok")
+        err = sum(1 for c in pr.cases if c.status == "error")
+        print(
+            f"  {label}: mean={pr.overall_mean_accuracy:.0%}  "
+            f"pass={pr.overall_pass_rate:.0%}  "
+            f"errors={err}/{ok + err}"
+        )
+
+    generate_report(
+        summary,
+        output=args.report,
+        sections=sections,
+        title=args.title,
+        pdf=args.pdf,
+    )
+    print(f"\nReport written to: {args.report}")
+    if args.pdf:
+        pdf_path = Path(args.report).with_suffix(".pdf")
+        print(f"PDF written to:    {pdf_path}")
 
 
 # ── visualise ─────────────────────────────────────────────────────────────────
