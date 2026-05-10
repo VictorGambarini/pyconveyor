@@ -108,8 +108,9 @@ class BatchRunner:
         pipeline_path: str | Path,
         max_workers: int = 4,
         progress: bool | None = None,
+        schemas: dict[str, type] | None = None,
     ) -> None:
-        self._runner = PipelineRunner(pipeline_path)
+        self._runner = PipelineRunner(pipeline_path, schemas=schemas)
         self._max_workers = max_workers
         self._item_hooks: list[Callable[..., Any]] = []
         if progress is None:

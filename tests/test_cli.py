@@ -340,3 +340,257 @@ class TestCliBatch:
         assert code == 1
         assert "reserved" in output.lower() or "conflict" in output.lower()
 
+
+# ── Feature 1: inline schema — CLI tests ─────────────────────────────────────
+
+class TestCliInlineSchema:
+    def _inline_pipeline(self, tmp_path: Path) -> Path:
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"title": "Hi"}\'\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      title: str\n"
+        )
+        return pipeline
+
+    def test_validate_passes_with_inline_dict_schema(self, tmp_path: Path) -> None:
+        pipeline = self._inline_pipeline(tmp_path)
+        code, output = _run_cli("validate", str(pipeline))
+        assert code == 0
+        assert "valid" in output.lower()
+
+    def test_schema_emit_includes_oneof_on_schema_field(self) -> None:
+        code, output = _run_cli("schema")
+        assert code == 0
+        parsed = json.loads(output)
+        schema_field = parsed["definitions"]["Step"]["properties"]["schema"]
+        assert "oneOf" in schema_field
+
+
+# ── Feature 3: schema infer — CLI tests ───────────────────────────────────────
+
+class TestCliSchemaInfer:
+    def _simple_pipeline(self, tmp_path: Path) -> Path:
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - "{}"\n'
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+        )
+        return pipeline
+
+    def test_schema_infer_exits_0_and_prints_source(self, tmp_path: Path) -> None:
+        pipeline = self._simple_pipeline(tmp_path)
+        sample = tmp_path / "sample.json"
+        sample.write_text('{"title": "hello", "score": 1}')
+        code, output = _run_cli("schema", "infer", str(pipeline), "--sample", str(sample))
+        assert code == 0
+        assert "class ExtractSchema(BaseModel):" in output
+
+    def test_schema_infer_output_file(self, tmp_path: Path) -> None:
+        pipeline = self._simple_pipeline(tmp_path)
+        sample = tmp_path / "sample.json"
+        sample.write_text('{"title": "hi"}')
+        out = tmp_path / "schemas_out.py"
+        code, output = _run_cli(
+            "schema", "infer", str(pipeline), "--sample", str(sample), "--output", str(out)
+        )
+        assert code == 0
+        assert out.exists()
+        assert "class ExtractSchema(BaseModel):" in out.read_text()
+
+    def test_schema_infer_jsonl_warns_and_uses_first(self, tmp_path: Path) -> None:
+        pipeline = self._simple_pipeline(tmp_path)
+        sample = tmp_path / "results.jsonl"
+        sample.write_text('{"title": "first"}\n{"title": "second"}\n')
+        code, output = _run_cli("schema", "infer", str(pipeline), "--sample", str(sample))
+        assert code == 0
+        assert "Warning" in output or "warning" in output
+        assert "class ExtractSchema(BaseModel):" in output
+
+    def test_schema_infer_non_dict_json_exits_nonzero(self, tmp_path: Path) -> None:
+        pipeline = self._simple_pipeline(tmp_path)
+        sample = tmp_path / "sample.json"
+        sample.write_text('[1, 2, 3]')
+        code, output = _run_cli("schema", "infer", str(pipeline), "--sample", str(sample))
+        assert code != 0
+        assert "Error" in output
+
+    def test_schema_infer_missing_sample_exits_nonzero(self, tmp_path: Path) -> None:
+        pipeline = self._simple_pipeline(tmp_path)
+        code, output = _run_cli(
+            "schema", "infer", str(pipeline), "--sample", str(tmp_path / "missing.json")
+        )
+        assert code != 0
+        assert "Error" in output
+
+    def test_schema_emit_subcommand_still_works(self) -> None:
+        code, output = _run_cli("schema", "emit")
+        assert code == 0
+        parsed = json.loads(output)
+        assert "properties" in parsed
+
+    def test_schema_bare_still_works(self) -> None:
+        code, output = _run_cli("schema")
+        assert code == 0
+        parsed = json.loads(output)
+        assert "properties" in parsed
+
+    def test_schema_infer_step_override(self, tmp_path: Path) -> None:
+        pipeline = self._simple_pipeline(tmp_path)
+        sample = tmp_path / "sample.json"
+        sample.write_text('{"score": 42}')
+        code, output = _run_cli(
+            "schema", "infer", str(pipeline), "--sample", str(sample),
+            "--step", "my_custom_step",
+        )
+        assert code == 0
+        assert "class MyCustomStepSchema(BaseModel):" in output
+
+    def test_first_llm_step_name_exception_returns_extract(self, tmp_path: Path) -> None:
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text("not: [valid: yaml: [\n")  # invalid YAML → exception path
+        sample = tmp_path / "sample.json"
+        sample.write_text('{"title": "x"}')
+        code, output = _run_cli(
+            "schema", "infer", str(pipeline), "--sample", str(sample),
+        )
+        assert code == 0
+        assert "class ExtractSchema(BaseModel):" in output
+
+
+# ── Feature 5: interactive init — CLI tests ───────────────────────────────────
+
+class TestCliInitInteractive:
+    def _run_interactive(
+        self, tmp_path: Path, inputs: list[str]
+    ) -> tuple[int, str]:
+        from unittest.mock import patch
+
+        target = tmp_path / "project"
+        with patch("builtins.input", side_effect=inputs):
+            return _run_cli("init", str(target), "--interactive")
+
+    def test_full_session_writes_pipeline_with_inline_schema(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            [
+                "articles",           # subject
+                "title:str",          # field 1
+                "score:int | None",   # field 2
+                "",                   # done
+                "1",                  # provider: OpenAI
+            ],
+        )
+        assert code == 0
+        pipeline_text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "title: str" in pipeline_text
+        assert "score: int | None" in pipeline_text
+
+    def test_pipeline_does_not_contain_string_schema_ref(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            ["docs", "title:str", "", "1"],
+        )
+        assert code == 0
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "schema: schemas:" not in text
+
+    def test_schemas_py_not_written(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(tmp_path, ["docs", "title:str", "", "1"])
+        assert code == 0
+        assert not (tmp_path / "project" / "schemas.py").exists()
+
+    def test_prompt_template_written_with_schema_hint(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(tmp_path, ["docs", "title:str", "", "1"])
+        assert code == 0
+        tmpl = (tmp_path / "project" / "prompts" / "extract.j2").read_text()
+        assert "schema_hint" in tmpl
+
+    def test_invalid_field_name_skipped(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            [
+                "docs",
+                "123bad:str",   # invalid identifier → skipped
+                "title:str",    # valid
+                "",
+                "1",
+            ],
+        )
+        assert code == 0
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "title: str" in text
+        assert "123bad" not in text
+
+    def test_empty_fields_falls_back_to_default(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            ["docs", "", "1"],  # no fields entered
+        )
+        assert code == 0
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "title: str" in text
+        assert "key_points: list[str]" in text
+
+    def test_provider_choice_2_produces_anthropic(self, tmp_path: Path) -> None:
+        self._run_interactive(tmp_path, ["docs", "title:str", "", "2"])
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "provider: anthropic" in text
+
+    def test_provider_choice_3_produces_ollama(self, tmp_path: Path) -> None:
+        self._run_interactive(tmp_path, ["docs", "title:str", "", "3"])
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "provider: openai_compat" in text
+        assert "11434" in text
+
+    def test_static_init_unchanged(self, tmp_path: Path) -> None:
+        target = tmp_path / "static_project"
+        code, _ = _run_cli("init", str(target))
+        assert code == 0
+        assert (target / "schemas.py").exists()
+        assert (target / "pipeline.yaml").exists()
+
+    def test_unknown_provider_choice_falls_back_to_openai(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            ["docs", "title:str", "", "99"],  # 99 is not a valid choice → defaults to OpenAI
+        )
+        assert code == 0
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "provider: openai" in text or "provider: openai_compat" in text
+
+    def test_field_without_colon_is_skipped(self, tmp_path: Path) -> None:
+        code, _ = self._run_interactive(
+            tmp_path,
+            [
+                "docs",
+                "nocoion",   # no colon → skipped
+                "title:str",
+                "",
+                "1",
+            ],
+        )
+        assert code == 0
+        text = (tmp_path / "project" / "pipeline.yaml").read_text()
+        assert "title: str" in text
+        assert "nocoion" not in text
+

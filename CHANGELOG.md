@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] — 2026-05-10
+
+### Added
+- Inline YAML schemas: `schema:` on `llm` steps now accepts a field-map dict
+  in addition to a `module:Class` string reference.
+- `PipelineRunner(schemas={"step": MyModel})` — inject Pydantic models directly
+  from Python without a `schemas.py` file.
+- `pyconveyor schema infer` — generate a `schemas.py` stub from sample JSON output.
+- `{{ schema_hint }}` — auto-generated field description available in all prompt
+  templates when a schema is present.
+- `pyconveyor init --interactive` — guided project setup; defines fields
+  interactively and uses inline YAML schema, no `schemas.py` required.
+
+### Fixed
+- `pyconveyor schema infer` now exits with an error message on empty JSONL input
+  instead of silently emitting invalid Python.
+- Non-identifier JSON keys (e.g. `"my-field"`, `"123abc"`) are now sanitised to
+  valid Python identifiers in the generated schema stub.
+- Inline YAML schemas with YAML boolean or null field names (e.g. `yes:`, `null:`)
+  now raise a clear `SchemaRefError` instead of crashing with a Pydantic error.
+- `--step` argument to `pyconveyor schema infer` is now sanitised before being
+  embedded in the generated class name, preventing injection of invalid Python.
+
+---
+
 ## [1.0.1] — 2026-05-10
 
 ### Changed
@@ -115,5 +140,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ISSUE-003**: `pyconveyor validate` / `pyconveyor run` now insert the pipeline directory into `sys.path` so local schema modules are importable without installation.
 - **ISSUE-004**: `pyconveyor run --input` now accepts an inline JSON string starting with `{` or `[`, eliminating the spurious `FileNotFoundError` on inline JSON input.
 
+[1.1.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/VictorGambarini/pyconveyor/releases/tag/v1.0.1
 [0.1.0]: https://github.com/VictorGambarini/pyconveyor/releases/tag/v0.1.0
