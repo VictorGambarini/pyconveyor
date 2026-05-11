@@ -1,6 +1,7 @@
 """Jinja2 prompt rendering."""
 from __future__ import annotations
 
+import json as _json
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from jinja2 import (
     TemplateSyntaxError,
     UndefinedError,
 )
+from pydantic import BaseModel
 
 from .errors import PyConveyorError
 
@@ -19,14 +21,29 @@ class PromptRenderError(PyConveyorError):
     """Raised when a Jinja2 template cannot be rendered."""
 
 
+def _tojson(value: Any, indent: int | None = None) -> str:
+
+    if isinstance(value, BaseModel):
+        return value.model_dump_json(indent=indent)
+    if isinstance(value, list):
+        items = [
+            _json.loads(v.model_dump_json()) if isinstance(v, BaseModel) else v
+            for v in value
+        ]
+        return _json.dumps(items, indent=indent, ensure_ascii=False)
+    return _json.dumps(value, indent=indent, ensure_ascii=False)
+
+
 def _make_env(template_dir: str | Path) -> Environment:
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(template_dir)),
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
+    env.filters["tojson"] = _tojson
+    return env
 
 
 def render_prompt(
