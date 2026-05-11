@@ -11,10 +11,76 @@ Every field, its type, whether it's required, its default value, and an example 
 |-----|------|----------|---------|-------------|
 | `models` | map | yes | — | Named model configurations (see [Model](#model)) |
 | `steps` | list | yes | — | Ordered list of steps to execute |
+| `schema` | map | no | — | Top-level YAML schema block (see [Schema block](#schema-block)) |
 | `schemas` | map | no | — | Named schema imports (alternative to inline `schema:`) |
 | `parsers` | map | no | — | Named parser imports |
 | `vocabularies` | map | no | — | Named [Vocabulary](#vocabulary) definitions |
 | `outputs` | map | no | — | Automatic output saving after a run (see [Outputs](#outputs)) |
+
+---
+
+## Schema block
+
+Defined under the top-level `schema:` key. Generates a Pydantic model at load time. Fields are either simple type strings or rich dicts.
+
+### Simple type string
+
+```yaml
+schema:
+  name: str
+  score: float | None
+```
+
+### Rich field dict
+
+```yaml
+schema:
+  name:
+    type: str
+    description: "Full name of the entity."
+    min_length: 1
+  accession:
+    type: str | None
+    description: "Database accession ID."
+    pattern: "^[A-Za-z0-9][A-Za-z0-9_.]{2,39}$"
+    on_fail: null
+```
+
+### Rich field keys
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `type` | string | yes | — | Type string (see supported types above) |
+| `description` | string | no | — | Rendered in `{{ schema_hint }}` prompt variable |
+| `pattern` | string | no | — | Regex; value must match the full string |
+| `min_length` | integer | no | — | Minimum string length |
+| `max_length` | integer | no | — | Maximum string length |
+| `min_items` | integer | no | — | Minimum list length |
+| `max_items` | integer | no | — | Maximum list length |
+| `on_fail` | string | no | `error` | `error` — raise (triggers retry); `null` — coerce to None; `warn` — log and keep |
+| `vocab` | string | no | — | Key from `vocabularies:` block; hint only, not enforced |
+
+### Nested list of objects
+
+```yaml
+schema:
+  entries:
+    type: list
+    description: "One entry per record."
+    min_items: 1
+    items:
+      organism:
+        type: str
+        description: "Genus + species binomial."
+        min_length: 1
+      confidence:
+        type: float
+        description: "Extraction confidence 0.0–1.0."
+```
+
+### Supported type strings
+
+`str`, `int`, `float`, `bool`, any of the above followed by ` | None`, and `list[str]` / `list[int]` / `list[float]` / `list[bool]` / `dict[str, str]` / `dict[str, int]`. Use `type: list` with an `items:` block for lists of structured objects.
 
 ---
 

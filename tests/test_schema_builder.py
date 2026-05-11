@@ -453,7 +453,7 @@ class TestSchemaHintDescriptions:
         })
         hint = model_to_schema_hint(model)
         lines = hint.splitlines()
-        title_line = next(l for l in lines if '"title"' in l)
+        title_line = next(ln for ln in lines if '"title"' in ln)
         idx = lines.index(title_line)
         assert lines[idx + 1].strip() == "The paper title"
         assert lines[idx + 1].startswith("    ")  # indented
@@ -490,8 +490,8 @@ class TestSchemaHintDescriptions:
         })
         hint = model_to_schema_hint(model)
         lines = hint.splitlines()
-        entries_line = next(l for l in lines if '"entries"' in l)
-        name_line = next(l for l in lines if '"name"' in l)
+        entries_line = next(ln for ln in lines if '"entries"' in ln)
+        name_line = next(ln for ln in lines if '"name"' in ln)
         assert len(name_line) - len(name_line.lstrip()) > len(entries_line) - len(entries_line.lstrip())
 
     def test_external_pydantic_model_with_field_description(self):
@@ -503,7 +503,7 @@ class TestSchemaHintDescriptions:
         hint = model_to_schema_hint(Annotated)
         assert '"organism": string (required)' in hint
         lines = hint.splitlines()
-        org_line = next(l for l in lines if '"organism"' in l)
+        org_line = next(ln for ln in lines if '"organism"' in ln)
         idx = lines.index(org_line)
         assert "Scientific name" in lines[idx + 1]
 

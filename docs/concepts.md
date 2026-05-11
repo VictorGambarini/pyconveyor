@@ -2,16 +2,41 @@
 
 Understanding how pyconveyor pipelines work.
 
-## The three files
+## The two required files
 
-Every pyconveyor project has the same shape:
+Every pyconveyor project needs at minimum:
 
 ```
 your_project/
-├── pipeline.yaml      # declares what to do
-├── schemas.py         # declares what shape the output must have
+├── pipeline.yaml      # declares what to do and what shape the output must have
 └── prompts/
     └── extract.j2     # declares what to ask the model
+```
+
+The schema lives inline in `pipeline.yaml` — no separate Python file needed:
+
+```yaml
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt: prompts/extract.j2
+    schema:
+      vendor:
+        type: str
+        description: "Company name as written on the invoice."
+      amount: float
+      due_date: str | None
+```
+
+For advanced validation (cross-field rules, computed fields), you can add a `schemas.py`:
+
+```
+your_project/
+├── pipeline.yaml
+├── schemas.py         # optional — Pydantic models for complex validation
+└── prompts/
+    └── extract.j2
 ```
 
 pyconveyor owns the runner. You own the steps, schemas, and prompts.

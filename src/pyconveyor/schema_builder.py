@@ -183,9 +183,9 @@ def _parse_rich_field(
         try:
             python_type, default = _parse_type(type_str)
         except Exception:
-            from .errors import SchemaRefError as _SE
+            from .errors import SchemaRefError
 
-            raise _SE(f"Unsupported type '{type_str}' for field '{name}'.")
+            raise SchemaRefError(f"Unsupported type '{type_str}' for field '{name}'.")
 
     # Build Pydantic FieldInfo
     field_kwargs: dict[str, Any] = {}

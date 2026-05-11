@@ -65,6 +65,27 @@ steps:
 
 No `schemas.py` file. The schema lives in the YAML.
 
+You can add descriptions to any field — they are injected into the LLM prompt automatically via `{{ schema_hint }}`:
+
+```yaml
+    schema:
+      invoice_number:
+        type: str
+        description: "Invoice identifier exactly as printed (e.g. INV-2024-001)."
+      vendor:
+        type: str
+        description: "Vendor company name."
+        min_length: 1
+      amount:
+        type: float
+        description: "Total invoice amount, numeric only (no currency symbol)."
+      due_date:
+        type: str | None
+        description: "Due date in YYYY-MM-DD format. Null if not stated."
+```
+
+See the **[YAML Schema guide](guides/yaml-schema.md)** for field constraints, nested objects, and `on_fail` behaviour.
+
 ---
 
 ## Option B — Static setup
