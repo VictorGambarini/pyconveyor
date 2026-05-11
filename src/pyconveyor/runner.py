@@ -6,6 +6,7 @@ This is the heart of pyconveyor.  You describe a workflow in YAML, point
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
@@ -44,6 +45,21 @@ from .steps.script_step import execute_script_step
 logger = logging.getLogger("pyconveyor.runner")
 
 load_dotenv(override=False)  # load .env once at import time (non-invasive)
+
+_SAVE_UNSET = object()  # sentinel: step has no explicit 'save' key
+
+
+def _write_step_json(path: Path, value: Any) -> None:
+    """Serialise *value* to JSON and write to *path*, creating parents as needed."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if hasattr(value, "model_dump_json"):
+            content = value.model_dump_json(indent=2)
+        else:
+            content = json.dumps(value, indent=2, default=str)
+        path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to write output '%s': %s", path, exc)
 
 
 # ── Result data classes ────────────────────────────────────────────────────────
@@ -319,6 +335,7 @@ class PipelineRunner:
             logger.error("Pipeline aborted: %s", e)
 
         self._apply_growth_policies(rctx, effective_models)
+        self._save_outputs(rctx, dry_run=dry_run)
 
         for hook in self._hooks["on_run_end"]:
             try:
@@ -835,6 +852,8 @@ class PipelineRunner:
         steps: list[dict[str, Any]] = spec.get("steps", [])
         all_step_names: set[str] = self._collect_step_names(steps)
 
+        self._validate_outputs_block(spec, file_str)
+
         self._validate_steps(
             steps,
             file_str,
@@ -1036,6 +1055,125 @@ class PipelineRunner:
             condition = step.get("condition")
             if condition:
                 validate_expression(condition, file_str, f"{key_base}.condition")
+
+            # Validate save: key
+            save_val = step.get("save")
+            if save_val is not None and save_val is not False and not isinstance(save_val, str):
+                raise StepConfigError(
+                    f"Step '{name}': 'save' must be false or a filename string, got {save_val!r}",
+                    file=file_str,
+                    key_path=f"{key_base}.save",
+                )
+
+    # ── Output saving ──────────────────────────────────────────────────────────
+
+    def _validate_outputs_block(self, spec: dict[str, Any], file_str: str) -> None:
+        outputs = spec.get("outputs")
+        if outputs is None:
+            return
+        if not isinstance(outputs, dict):
+            raise PipelineLoadError("'outputs' must be a mapping", file=file_str)
+        if "dir" in outputs and not isinstance(outputs["dir"], str):
+            raise PipelineLoadError("'outputs.dir' must be a string", file=file_str)
+        if "final_as" in outputs and not isinstance(outputs["final_as"], str):
+            raise PipelineLoadError("'outputs.final_as' must be a string", file=file_str)
+        # Detect final_as collision with an auto-generated step filename
+        final_as = outputs.get("final_as")
+        if final_as:
+            for step in spec.get("steps", []):
+                if step.get("save", _SAVE_UNSET) is _SAVE_UNSET:
+                    if final_as == f"{step['name']}.json":
+                        raise PipelineLoadError(
+                            f"'outputs.final_as' ({final_as!r}) collides with the"
+                            f" auto-generated filename for step '{step['name']}'."
+                            " Use a different name or set save: false on that step.",
+                            file=file_str,
+                        )
+
+    def _save_outputs(self, rctx: RunContext, dry_run: bool) -> None:
+        """Save step outputs to disk according to the outputs: block."""
+        if dry_run:
+            return
+        if rctx.failed:
+            return
+        outputs = self._spec.get("outputs")
+        if not outputs:
+            return
+
+        dir_val = outputs.get("dir", "./outputs")
+        try:
+            resolved = resolve_value(dir_val, rctx._expr_context(), str(self._path))
+            output_dir = Path(str(resolved))
+        except Exception as exc:
+            logger.warning("outputs.dir evaluation failed (%s) — skipping output saving", exc)
+            return
+
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("Could not create outputs dir '%s': %s", output_dir, exc)
+            return
+
+        for step in self._spec.get("steps", []):
+            self._save_step_result(step, rctx, output_dir)
+
+        final_as = outputs.get("final_as")
+        if final_as:
+            final_dest = output_dir / final_as
+            try:
+                final_dest.resolve().relative_to(output_dir.resolve())
+            except ValueError:
+                logger.warning("Skipping final_as: resolved path escapes output_dir")
+            else:
+                final_value = self._resolve_final_result(rctx)
+                if final_value is not None:
+                    _write_step_json(final_dest, final_value)
+                    logger.debug("Saved final output → %s", final_dest)
+
+    def _save_step_result(
+        self, step: dict[str, Any], rctx: RunContext, output_dir: Path
+    ) -> None:
+        name: str = step["name"]
+        save = step.get("save", _SAVE_UNSET)
+
+        if save is False:
+            return
+
+        sr = rctx._step_results.get(name)
+        if sr is None or sr.value is None:
+            return
+
+        filename = f"{name}.json" if save is _SAVE_UNSET else str(save)
+        dest = output_dir / filename
+        try:
+            dest.resolve().relative_to(output_dir.resolve())
+        except ValueError:
+            logger.warning("Skipping '%s': resolved path escapes output_dir", filename)
+            return
+        _write_step_json(dest, sr.value)
+
+        # Ensemble: also save each member's result unless the step opted out entirely
+        if step.get("type") == "ensemble" and save is _SAVE_UNSET:
+            for member in step.get("members", []):
+                member_name = member.get("name", member.get("model", ""))
+                sub_key = f"{name}.{member_name}"
+                sub_sr = rctx._step_results.get(sub_key)
+                if sub_sr and sub_sr.value is not None:
+                    sub_dest = output_dir / f"{sub_key}.json"
+                    try:
+                        sub_dest.resolve().relative_to(output_dir.resolve())
+                    except ValueError:
+                        logger.warning("Skipping '%s': resolved path escapes output_dir", sub_key)
+                        continue
+                    _write_step_json(sub_dest, sub_sr.value)
+
+    def _resolve_final_result(self, rctx: RunContext) -> Any:
+        """Walk backwards through declared steps to find the last non-None result."""
+        for step in reversed(self._spec.get("steps", [])):
+            sr = rctx._step_results.get(step["name"])
+            if sr and sr.value is not None:
+                return sr.value
+        return None
 
     def _validate_llm_step(
         self,

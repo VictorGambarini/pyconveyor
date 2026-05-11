@@ -36,6 +36,7 @@ mypy src
 YAML pipeline → PipelineRunner → RunContext
   → for each step: resolve exprs → check condition → execute → store StepResult
   → LLM steps: validate output → retry with error feedback on failure
+  → outputs: block (if present): write step results to disk (skipped on failure/dry-run)
   → return RunContext
 ```
 

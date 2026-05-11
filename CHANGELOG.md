@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] — 2026-05-11
+
+### Added
+- **`outputs:` block** — declare an `outputs:` section in any pipeline YAML to automatically
+  save step results to disk after a run. No code changes required.
+  - `dir`: Jinja2 expression for the output directory (default: `./outputs/`).
+  - `final_as`: filename to write the last non-`None` step result (e.g. `result.json`).
+  - Per-step `save:` key: `false` to suppress a step, or a custom filename string.
+  - Ensemble steps additionally save each member's result as `{step}.{member}.json` by default.
+  - Writes are skipped in dry-run mode and are non-fatal on filesystem errors.
+- **`save:` validation** — `save:` values that are not `false` or a filename string are now
+  rejected at load time with a clear `StepConfigError`.
+
+---
+
 ## [1.3.1] — 2026-05-11
 
 ### Fixed
@@ -199,6 +214,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ISSUE-003**: `pyconveyor validate` / `pyconveyor run` now insert the pipeline directory into `sys.path` so local schema modules are importable without installation.
 - **ISSUE-004**: `pyconveyor run --input` now accepts an inline JSON string starting with `{` or `[`, eliminating the spurious `FileNotFoundError` on inline JSON input.
 
+[1.4.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.3.1...v1.4.0
+[1.3.1]: https://github.com/VictorGambarini/pyconveyor/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/VictorGambarini/pyconveyor/releases/tag/v1.0.1
 [0.1.0]: https://github.com/VictorGambarini/pyconveyor/releases/tag/v0.1.0

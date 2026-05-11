@@ -14,6 +14,7 @@ Every field, its type, whether it's required, its default value, and an example 
 | `schemas` | map | no | — | Named schema imports (alternative to inline `schema:`) |
 | `parsers` | map | no | — | Named parser imports |
 | `vocabularies` | map | no | — | Named [Vocabulary](#vocabulary) definitions |
+| `outputs` | map | no | — | Automatic output saving after a run (see [Outputs](#outputs)) |
 
 ---
 
@@ -92,6 +93,7 @@ All step types share these fields:
 | `on_error` | string | no | `raise` | One of `raise`, `continue`, `skip_remaining` |
 | `on_failure` | string | no | — | Dotted import path `module:fn` called on error: `fn(step_name, exc, rctx)` |
 | `optional` | boolean | no | `false` | For child steps inside `parallel`: failure doesn't abort the group |
+| `save` | `false` or string | no | *(auto)* | Output saving override when `outputs:` is present. `false` suppresses the file; a string sets a custom filename. `true` is rejected at load time. |
 
 ---
 
@@ -366,6 +368,55 @@ models:
 
 ---
 
+## Outputs
+
+Defined under `outputs:`. When present, pyconveyor writes step results to disk after each run. Writes are skipped when the pipeline fails or is running in dry-run mode. All filesystem errors are non-fatal (logged as warnings).
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `dir` | string | no | `./outputs` | Output directory. May be a Jinja2 expression evaluated against `ctx`. |
+| `final_as` | string | no | — | Filename to write the last non-`None` step result (e.g. `result.json`). Detected at load time if it collides with an auto-generated step filename. |
+
+**Per-step `save:` key** (added to any step definition):
+
+| Value | Meaning |
+|-------|---------|
+| *(absent)* | Auto-save: write `{step_name}.json` |
+| `false` | Suppress: do not write a file for this step |
+| `"custom.json"` | Write the result to the given filename inside `outputs.dir` |
+
+`save: true` is rejected at load time with a `StepConfigError`.
+
+Ensemble steps with no explicit `save:` additionally write each member's result as `{step}.{member}.json`.
+
+Path traversal protection: any filename that resolves outside `outputs.dir` is silently skipped.
+
+**Example:**
+```yaml
+outputs:
+  dir: "./results/{{ ctx.run_id }}"
+  final_as: result.json
+
+steps:
+  - name: classify
+    type: llm
+    model: default
+    prompt: prompts/classify.j2
+    schema:
+      label: str
+      confidence: float
+    # Default: saves as classify.json
+
+  - name: postprocess
+    type: transform
+    fn: steps:clean
+    inputs:
+      data: "{{ steps.classify }}"
+    save: false   # suppress — this is an intermediate step
+```
+
+---
+
 ## Vocabulary
 
 Defined under `vocabularies.<name>`:
@@ -405,6 +456,10 @@ vocabularies:
   material:
     known: [steel, aluminium, copper, plastic]
 
+outputs:
+  dir: ./outputs
+  final_as: result.json
+
 steps:
   - name: extract
     type: llm
@@ -422,5 +477,6 @@ steps:
         fn: steps:enrich
         inputs:
           data: "{{ steps.extract }}"
+        save: false   # intermediate step — suppress output file
     on_error: continue
 ```

@@ -1,0 +1,37 @@
+# Ensemble step with outputs: block — verifies sub-result saving.
+
+models:
+  primary:
+    provider: mock
+    model: mock-primary
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+  reviewer:
+    provider: mock
+    model: mock-reviewer
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+  judge_model:
+    provider: mock
+    model: mock-judge
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+  final_as: result.json
+
+steps:
+  - name: extract
+    type: ensemble
+    schema: tests.fixtures.schemas:Greeting
+    prompt: greet.j2
+    members:
+      - model: primary
+        name: primary
+      - model: reviewer
+        name: reviewer
+        required: false
+    judge:
+      model: judge_model
+      condition: all_succeeded
