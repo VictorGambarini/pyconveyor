@@ -388,6 +388,87 @@ steps:
         raw = (out_dir / "data.json").read_text()
         assert json.loads(raw) == "Ada"
 
+    def test_path_traversal_via_save_is_rejected(self, tmp_path):
+        """save: '../evil.json' must not write outside output_dir."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "hi", "language": "en"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: s
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    save: "../evil.json"
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run({"name": "Ada", "output_dir": str(out_dir)})
+        assert not (tmp_path / "evil.json").exists()
+
+    def test_outputs_not_saved_when_pipeline_fails(self, tmp_path):
+        """When the pipeline aborts (on_error: raise), no outputs should be written."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - "not valid json"
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: will_fail
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    max_attempts: 1
+    on_error: raise
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        try:
+            PipelineRunner(pipeline_file).run({"name": "Ada", "output_dir": str(out_dir)})
+        except Exception:
+            pass
+        assert not out_dir.exists() or list(out_dir.iterdir()) == []
+
+    def test_final_as_collision_with_step_name_raises(self, tmp_path):
+        """final_as that matches a step's auto-generated name must raise at load time."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: m
+    mock_responses: ['{"message":"hi","language":"en"}']
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+  final_as: step_a.json
+
+steps:
+  - name: step_a
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+"""
+        p = tmp_path / "bad.yaml"
+        p.write_text(yaml_text)
+        with pytest.raises(PipelineLoadError, match="collides"):
+            PipelineRunner(p)
+
     def test_final_as_returns_none_when_all_steps_skipped(self, tmp_path):
         """_resolve_final_result returns None when every step is conditioned away."""
         yaml_text = """

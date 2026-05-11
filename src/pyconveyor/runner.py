@@ -1077,10 +1077,24 @@ class PipelineRunner:
             raise PipelineLoadError("'outputs.dir' must be a string", file=file_str)
         if "final_as" in outputs and not isinstance(outputs["final_as"], str):
             raise PipelineLoadError("'outputs.final_as' must be a string", file=file_str)
+        # Detect final_as collision with an auto-generated step filename
+        final_as = outputs.get("final_as")
+        if final_as:
+            for step in spec.get("steps", []):
+                if step.get("save", _SAVE_UNSET) is _SAVE_UNSET:
+                    if final_as == f"{step['name']}.json":
+                        raise PipelineLoadError(
+                            f"'outputs.final_as' ({final_as!r}) collides with the"
+                            f" auto-generated filename for step '{step['name']}'."
+                            " Use a different name or set save: false on that step.",
+                            file=file_str,
+                        )
 
     def _save_outputs(self, rctx: RunContext, dry_run: bool) -> None:
         """Save step outputs to disk according to the outputs: block."""
         if dry_run:
+            return
+        if rctx.failed:
             return
         outputs = self._spec.get("outputs")
         if not outputs:
@@ -1105,10 +1119,16 @@ class PipelineRunner:
 
         final_as = outputs.get("final_as")
         if final_as:
-            final_value = self._resolve_final_result(rctx)
-            if final_value is not None:
-                _write_step_json(output_dir / final_as, final_value)
-                logger.debug("Saved final output → %s", output_dir / final_as)
+            final_dest = output_dir / final_as
+            try:
+                final_dest.resolve().relative_to(output_dir.resolve())
+            except ValueError:
+                logger.warning("Skipping final_as: resolved path escapes output_dir")
+            else:
+                final_value = self._resolve_final_result(rctx)
+                if final_value is not None:
+                    _write_step_json(final_dest, final_value)
+                    logger.debug("Saved final output → %s", final_dest)
 
     def _save_step_result(
         self, step: dict[str, Any], rctx: RunContext, output_dir: Path
@@ -1124,7 +1144,13 @@ class PipelineRunner:
             return
 
         filename = f"{name}.json" if save is _SAVE_UNSET else str(save)
-        _write_step_json(output_dir / filename, sr.value)
+        dest = output_dir / filename
+        try:
+            dest.resolve().relative_to(output_dir.resolve())
+        except ValueError:
+            logger.warning("Skipping '%s': resolved path escapes output_dir", filename)
+            return
+        _write_step_json(dest, sr.value)
 
         # Ensemble: also save each member's result unless the step opted out entirely
         if step.get("type") == "ensemble" and save is _SAVE_UNSET:
@@ -1133,7 +1159,13 @@ class PipelineRunner:
                 sub_key = f"{name}.{member_name}"
                 sub_sr = rctx._step_results.get(sub_key)
                 if sub_sr and sub_sr.value is not None:
-                    _write_step_json(output_dir / f"{sub_key}.json", sub_sr.value)
+                    sub_dest = output_dir / f"{sub_key}.json"
+                    try:
+                        sub_dest.resolve().relative_to(output_dir.resolve())
+                    except ValueError:
+                        logger.warning("Skipping '%s': resolved path escapes output_dir", sub_key)
+                        continue
+                    _write_step_json(sub_dest, sub_sr.value)
 
     def _resolve_final_result(self, rctx: RunContext) -> Any:
         """Walk backwards through declared steps to find the last non-None result."""
