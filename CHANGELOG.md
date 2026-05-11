@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] — 2026-05-11
+
+### Fixed
+- `resolve_value` now unwraps `_NullSafeProxy` before returning when the value is a
+  pure `{{ expr }}` expression, so transform and IO step functions receive the raw
+  value rather than the proxy wrapper.
+- Added a `tojson` Jinja2 filter to prompt templates, enabling
+  `{{ steps.extract.entries | tojson(indent=2) }}` with full Pydantic model support.
+
+---
+
 ## [1.3.0] — 2026-05-11
 
 ### Added
