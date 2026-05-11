@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] — 2026-05-11
+
+### Added
+- **`outputs:` block** — declare an `outputs:` section in any pipeline YAML to automatically
+  save step results to disk after a run. No code changes required.
+  - `dir`: Jinja2 expression for the output directory (default: `./outputs/`).
+  - `final_as`: filename to write the last non-`None` step result (e.g. `result.json`).
+  - Per-step `save:` key: `false` to suppress a step, or a custom filename string.
+  - Ensemble steps additionally save each member's result as `{step}.{member}.json` by default.
+  - Writes are skipped in dry-run mode and are non-fatal on filesystem errors.
+- **`save:` validation** — `save:` values that are not `false` or a filename string are now
+  rejected at load time with a clear `StepConfigError`.
+
+---
+
 ## [1.3.1] — 2026-05-11
 
 ### Fixed
