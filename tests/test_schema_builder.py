@@ -212,3 +212,307 @@ class TestTypeToDescription:
         # Patch issubclass to raise, triggering the except Exception guard
         with patch("builtins.issubclass", side_effect=TypeError("simulated failure")):
             assert model_to_schema_hint(GoodModel) == ""
+
+
+# ── Rich field format ─────────────────────────────────────────────────────────
+
+class TestRichFieldFormat:
+    def test_rich_type_only(self):
+        model = yaml_dict_to_model("M", {"name": {"type": "str"}})
+        m = model(name="hello")
+        assert m.name == "hello"
+
+    def test_rich_optional(self):
+        model = yaml_dict_to_model("M", {"note": {"type": "str | None"}})
+        assert model().note is None
+        assert model(note="hi").note == "hi"
+
+    def test_rich_description_stored_on_field(self):
+        model = yaml_dict_to_model("M", {"title": {"type": "str", "description": "The title"}})
+        assert model.model_fields["title"].description == "The title"
+
+    def test_mixed_simple_and_rich(self):
+        model = yaml_dict_to_model("M", {
+            "plain": "str",
+            "rich": {"type": "int | None", "description": "A number"},
+        })
+        m = model(plain="x")
+        assert m.plain == "x"
+        assert m.rich is None
+        assert model.model_fields["rich"].description == "A number"
+
+    def test_rich_missing_type_raises(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError, match="missing the required 'type'"):
+            yaml_dict_to_model("M", {"x": {"description": "no type here"}})
+
+    def test_rich_unsupported_type_raises(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError):
+            yaml_dict_to_model("M", {"x": {"type": "datetime"}})
+
+    def test_non_string_non_dict_spec_raises(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError, match="must be a string or mapping"):
+            yaml_dict_to_model("M", {"x": 42})
+
+
+# ── Validators ────────────────────────────────────────────────────────────────
+
+class TestValidators:
+    def test_pattern_valid(self):
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str", "pattern": r"^[A-Z]{3}$"},
+        })
+        assert model(code="ABC").code == "ABC"
+
+    def test_pattern_error_raises(self):
+        from pydantic import ValidationError
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str", "pattern": r"^[A-Z]{3}$"},
+        })
+        with pytest.raises(ValidationError):
+            model(code="abc")
+
+    def test_pattern_on_fail_null(self):
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str | None", "pattern": r"^[A-Z]{3}$", "on_fail": "null"},
+        })
+        assert model(code="bad").code is None
+        assert model(code="ABC").code == "ABC"
+
+    def test_pattern_on_fail_none_treated_as_null(self):
+        # YAML `on_fail: null` deserialises to Python None; should coerce to null.
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str | None", "pattern": r"^[A-Z]{3}$", "on_fail": None},
+        })
+        assert model(code="bad").code is None
+        assert model(code="ABC").code == "ABC"
+
+    def test_pattern_on_fail_warn(self, caplog):
+        import logging
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str", "pattern": r"^[A-Z]{3}$", "on_fail": "warn"},
+        })
+        with caplog.at_level(logging.WARNING, logger="pyconveyor.schema"):
+            m = model(code="bad")
+        assert m.code == "bad"
+        assert any("does not match pattern" in r.message for r in caplog.records)
+
+    def test_pattern_none_value_skipped(self):
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str | None", "pattern": r"^[A-Z]{3}$"},
+        })
+        assert model(code=None).code is None
+
+    def test_min_length_valid(self):
+        model = yaml_dict_to_model("M", {"name": {"type": "str", "min_length": 2}})
+        assert model(name="hi").name == "hi"
+
+    def test_min_length_error_raises(self):
+        from pydantic import ValidationError
+        model = yaml_dict_to_model("M", {"name": {"type": "str", "min_length": 2}})
+        with pytest.raises(ValidationError):
+            model(name="x")
+
+    def test_max_length_error_raises(self):
+        from pydantic import ValidationError
+        model = yaml_dict_to_model("M", {"name": {"type": "str", "max_length": 3}})
+        with pytest.raises(ValidationError):
+            model(name="toolong")
+
+    def test_min_length_on_fail_null(self):
+        model = yaml_dict_to_model("M", {
+            "name": {"type": "str | None", "min_length": 2, "on_fail": "null"},
+        })
+        assert model(name="x").name is None
+        assert model(name="ok").name == "ok"
+
+    def test_min_items_valid(self):
+        model = yaml_dict_to_model("M", {
+            "tags": {"type": "list", "items": "str", "min_items": 1},
+        })
+        assert model(tags=["a"]).tags == ["a"]
+
+    def test_min_items_error_raises(self):
+        from pydantic import ValidationError
+        model = yaml_dict_to_model("M", {
+            "tags": {"type": "list", "items": "str", "min_items": 1},
+        })
+        with pytest.raises(ValidationError):
+            model(tags=[])
+
+    def test_max_items_error_raises(self):
+        from pydantic import ValidationError
+        model = yaml_dict_to_model("M", {
+            "tags": {"type": "list", "items": "str", "max_items": 2},
+        })
+        with pytest.raises(ValidationError):
+            model(tags=["a", "b", "c"])
+
+    def test_min_items_on_fail_null(self):
+        model = yaml_dict_to_model("M", {
+            "tags": {"type": "list | None", "items": "str", "min_items": 1, "on_fail": "null"},
+        })
+        assert model(tags=[]).tags is None
+
+    def test_multiple_validators_on_different_fields(self):
+        from pydantic import ValidationError
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str", "pattern": r"^[A-Z]+$"},
+            "name": {"type": "str", "min_length": 2},
+        })
+        assert model(code="ABC", name="hi").code == "ABC"
+        with pytest.raises(ValidationError):
+            model(code="abc", name="hi")
+        with pytest.raises(ValidationError):
+            model(code="ABC", name="x")
+
+
+# ── Nested schemas ────────────────────────────────────────────────────────────
+
+class TestNestedSchemas:
+    def test_list_of_objects(self):
+        model = yaml_dict_to_model("M", {
+            "items": {
+                "type": "list",
+                "items": {
+                    "name": {"type": "str"},
+                    "value": {"type": "float"},
+                },
+            },
+        })
+        m = model(items=[{"name": "x", "value": 1.5}])
+        assert m.items[0].name == "x"
+        assert m.items[0].value == pytest.approx(1.5)
+
+    def test_list_of_objects_with_primitive_items(self):
+        model = yaml_dict_to_model("M", {
+            "tags": {"type": "list", "items": "str"},
+        })
+        assert model(tags=["a", "b"]).tags == ["a", "b"]
+
+    def test_optional_list_of_objects(self):
+        model = yaml_dict_to_model("M", {
+            "items": {
+                "type": "list | None",
+                "items": {"name": {"type": "str"}},
+            },
+        })
+        assert model().items is None
+        assert model(items=[{"name": "x"}]).items[0].name == "x"
+
+    def test_nested_field_descriptions_preserved(self):
+        model = yaml_dict_to_model("M", {
+            "entries": {
+                "type": "list",
+                "items": {
+                    "title": {"type": "str", "description": "The title"},
+                },
+            },
+        })
+        # Get the item model from the list annotation
+        from typing import get_args
+        item_cls = get_args(model.model_fields["entries"].annotation)[0]
+        assert item_cls.model_fields["title"].description == "The title"
+
+    def test_nested_validators_enforced(self):
+        from pydantic import ValidationError
+        model = yaml_dict_to_model("M", {
+            "entries": {
+                "type": "list",
+                "items": {
+                    "code": {"type": "str", "pattern": r"^[A-Z]+$"},
+                },
+            },
+        })
+        with pytest.raises(ValidationError):
+            model(entries=[{"code": "bad"}])
+
+    def test_list_items_unsupported_primitive_raises(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError, match="unsupported items type"):
+            yaml_dict_to_model("M", {
+                "tags": {"type": "list", "items": "datetime"},
+            })
+
+    def test_list_items_invalid_type_raises(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError):
+            yaml_dict_to_model("M", {
+                "tags": {"type": "list", "items": 42},
+            })
+
+
+# ── schema_hint with descriptions and nesting ─────────────────────────────────
+
+class TestSchemaHintDescriptions:
+    def test_description_appears_indented(self):
+        model = yaml_dict_to_model("M", {
+            "title": {"type": "str", "description": "The paper title"},
+        })
+        hint = model_to_schema_hint(model)
+        lines = hint.splitlines()
+        title_line = next(ln for ln in lines if '"title"' in ln)
+        idx = lines.index(title_line)
+        assert lines[idx + 1].strip() == "The paper title"
+        assert lines[idx + 1].startswith("    ")  # indented
+
+    def test_field_without_description_has_no_extra_line(self):
+        model = yaml_dict_to_model("M", {"title": "str", "score": "int"})
+        hint = model_to_schema_hint(model)
+        lines = hint.splitlines()
+        # Only header + 2 field lines, no description lines
+        assert len(lines) == 3
+
+    def test_nested_model_expands_in_hint(self):
+        model = yaml_dict_to_model("M", {
+            "entries": {
+                "type": "list",
+                "items": {
+                    "name": {"type": "str", "description": "Item name"},
+                    "value": {"type": "float"},
+                },
+            },
+        })
+        hint = model_to_schema_hint(model)
+        assert '"entries": array of objects' in hint
+        assert '"name": string' in hint
+        assert "Item name" in hint
+        assert '"value": number' in hint
+
+    def test_nested_fields_more_indented_than_parent(self):
+        model = yaml_dict_to_model("M", {
+            "entries": {
+                "type": "list",
+                "items": {"name": {"type": "str", "description": "Name"}},
+            },
+        })
+        hint = model_to_schema_hint(model)
+        lines = hint.splitlines()
+        entries_line = next(ln for ln in lines if '"entries"' in ln)
+        name_line = next(ln for ln in lines if '"name"' in ln)
+        assert len(name_line) - len(name_line.lstrip()) > len(entries_line) - len(entries_line.lstrip())
+
+    def test_external_pydantic_model_with_field_description(self):
+        from pydantic import Field
+        class Annotated(BaseModel):
+            organism: str = Field(..., description="Scientific name")
+            score: float = Field(0.9)
+
+        hint = model_to_schema_hint(Annotated)
+        assert '"organism": string (required)' in hint
+        lines = hint.splitlines()
+        org_line = next(ln for ln in lines if '"organism"' in ln)
+        idx = lines.index(org_line)
+        assert "Scientific name" in lines[idx + 1]
+
+    def test_hint_type_for_nested_list_is_array_of_objects(self):
+        model = yaml_dict_to_model("M", {
+            "items": {
+                "type": "list",
+                "items": {"x": {"type": "str"}},
+            },
+        })
+        hint = model_to_schema_hint(model)
+        assert "array of objects" in hint

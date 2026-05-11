@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] — 2026-05-12
+
+### Added
+- **Rich YAML schema** — field definitions now support a dict form with `type`, `description`,
+  `pattern`, `min_length`, `max_length`, `min_items`, `max_items`, `on_fail`, and `vocab`.
+  - `description` values are rendered in the new `{{ schema_hint }}` Jinja2 variable, which
+    lists all fields with their descriptions and required/optional status — no more writing
+    schema descriptions manually in prompts.
+  - `pattern` enforces a regex constraint; `min_length` / `max_length` constrain strings;
+    `min_items` / `max_items` constrain lists.
+  - `on_fail` controls what happens when a constraint is violated:
+    `error` (default — raises `ValidationError`, triggers retry), `null` (silently coerces
+    to `None`), or `warn` (logs a warning and keeps the value).
+  - YAML `on_fail: null` (parsed as Python `None`) is treated as the `"null"` strategy.
+- **Nested list of objects** — `type: list` with an `items:` block generates a `list[SubModel]`
+  where `SubModel` is a dynamically built Pydantic model. Nested fields support the same rich
+  keys as top-level fields, including further nesting.
+- **Top-level `schema:` block** — define the pipeline's output schema once at the top level
+  and load it via `yaml_dict_to_model("Name", raw["schema"])`. This is the YAML-first
+  alternative to hand-written `schemas.py` files.
+- **`model_to_schema_hint(model_cls)`** — renders a plain-English field listing from any
+  Pydantic model (YAML-generated or hand-written). Nested `list[BaseModel]` fields are
+  expanded inline with deeper indentation. Available as `{{ schema_hint }}` in all
+  Jinja2 prompt templates when the step has a schema.
+- **`yaml_dict_to_model(name, field_map)`** — public API in `pyconveyor.schema_builder`.
+  Accepts both simple type strings and rich field dicts; can be mixed freely.
+
+### Changed
+- `concepts.md` updated: `schemas.py` is optional — the recommended path is now YAML-first.
+
+---
+
 ## [1.4.0] — 2026-05-11
 
 ### Added

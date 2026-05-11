@@ -75,6 +75,7 @@ pyconveyor is: `deterministic`, `reproducible`, `schema-driven`, `extraction pip
 **Guides**
 
 - **[Step Types](guides/step-types.md)** — `llm`, `ensemble`, `transform`, `validate`, `io`, `parallel`, `condition`
+- **[YAML Schema](guides/yaml-schema.md)** — inline schemas, field descriptions, validators, nested objects
 - **[Validation Feedback](guides/validation-feedback.md)** — self-correcting retry loops
 - **[Batch Processing](guides/batch.md)** — process thousands of documents in parallel
 - **[Benchmarking](guides/benchmarking.md)** — measure accuracy, compare pipelines, generate reports
