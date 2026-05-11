@@ -1,6 +1,7 @@
 """Jinja2 prompt rendering."""
 from __future__ import annotations
 
+import json as _json
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from jinja2 import (
     TemplateSyntaxError,
     UndefinedError,
 )
+from pydantic import BaseModel
 
 from .errors import PyConveyorError
 
@@ -20,8 +22,6 @@ class PromptRenderError(PyConveyorError):
 
 
 def _tojson(value: Any, indent: int | None = None) -> str:
-    import json as _json
-    from pydantic import BaseModel
 
     if isinstance(value, BaseModel):
         return value.model_dump_json(indent=indent)
