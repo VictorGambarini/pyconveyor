@@ -81,7 +81,9 @@ def _make_validator(field_rules: dict[str, dict]) -> Any | None:
             return data
 
         for fname, rules in _rules.items():
-            on_fail: str = rules.get("on_fail", "error")
+            _raw_on_fail = rules.get("on_fail", "error")
+            # YAML `on_fail: null` deserialises to Python None; treat as "null".
+            on_fail: str = "null" if _raw_on_fail is None else str(_raw_on_fail)
 
             def _apply(msg: str, _fname: str = fname, _on_fail: str = on_fail) -> bool:
                 """Coerce / warn / raise. Returns True if the field was nulled."""

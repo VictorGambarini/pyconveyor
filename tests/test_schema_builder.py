@@ -281,6 +281,14 @@ class TestValidators:
         assert model(code="bad").code is None
         assert model(code="ABC").code == "ABC"
 
+    def test_pattern_on_fail_none_treated_as_null(self):
+        # YAML `on_fail: null` deserialises to Python None; should coerce to null.
+        model = yaml_dict_to_model("M", {
+            "code": {"type": "str | None", "pattern": r"^[A-Z]{3}$", "on_fail": None},
+        })
+        assert model(code="bad").code is None
+        assert model(code="ABC").code == "ABC"
+
     def test_pattern_on_fail_warn(self, caplog):
         import logging
         model = yaml_dict_to_model("M", {
