@@ -103,7 +103,7 @@ pyconveyor is built around a single constraint: given the same input and the sam
 This has consequences:
 
 - **No hidden state.** Every dependency between steps is explicit in YAML.
-- **No side effects in the runner.** The runner never writes to disk or a database. Your `io` steps do that.
+- **Side effects are explicit.** Your `io` steps handle database writes and other side effects. The optional `outputs:` block writes step results to disk after the run completes — declared in YAML so the intent is always visible.
 - **No async.** Parallel steps use `ThreadPoolExecutor`. The execution model is synchronous and predictable.
 - **Schema validation is strict by default.** If a model returns output that doesn't match the schema, it retries — it doesn't silently accept bad data.
 

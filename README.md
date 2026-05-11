@@ -244,6 +244,29 @@ Review pending terms interactively:
 pyconveyor vocab review pipeline.yaml
 ```
 
+### Automatic output saving
+
+Add an `outputs:` block to any pipeline and pyconveyor will write step results to disk after each run — no `io` steps required:
+
+```yaml
+outputs:
+  dir: "./results/{{ ctx.doc_id }}"   # Jinja2 expression; default: ./outputs/
+  final_as: result.json               # write the last non-None step result here
+
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt: prompts/extract.j2
+    schema:
+      vendor: str
+      amount: float
+    # save: false          # suppress this step's file
+    # save: raw.json       # or use a custom filename
+```
+
+Each step with a non-None result is saved as `{step_name}.json`. Ensemble members are saved as `{step}.{member}.json`. Writes are non-fatal and skipped on pipeline failure or dry-run.
+
 ### Load-time validation
 
 `PipelineRunner("pipeline.yaml")` validates everything before spending any tokens:
