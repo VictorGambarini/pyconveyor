@@ -1,0 +1,34 @@
+# Multi-step pipeline for outputs: block tests.
+# output_dir must be supplied in input_data.
+
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "Bonjour Ada!", "language": "French"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+  final_as: result.json
+
+steps:
+  - name: step_a
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+
+  - name: step_b
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    save: false
+
+  - name: step_c
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    save: custom/greeting.json
