@@ -1058,7 +1058,7 @@ class PipelineRunner:
 
             # Validate save: key
             save_val = step.get("save")
-            if save_val is not None and not isinstance(save_val, (bool, str)):
+            if save_val is not None and save_val is not False and not isinstance(save_val, str):
                 raise StepConfigError(
                     f"Step '{name}': 'save' must be false or a filename string, got {save_val!r}",
                     file=file_str,

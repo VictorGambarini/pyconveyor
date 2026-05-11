@@ -343,3 +343,75 @@ steps:
         p.write_text(yaml_text)
         with pytest.raises(StepConfigError, match="save"):
             PipelineRunner(p)
+
+    def test_save_true_raises(self, tmp_path):
+        """save: true is not a valid value — would silently produce True.json."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: m
+    mock_responses: ['{"message":"hi","language":"en"}']
+steps:
+  - name: s
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    save: true
+"""
+        p = tmp_path / "bad.yaml"
+        p.write_text(yaml_text)
+        with pytest.raises(StepConfigError, match="save"):
+            PipelineRunner(p)
+
+
+# ── Edge cases ─────────────────────────────────────────────────────────────────
+
+class TestOutputsEdgeCases:
+    def test_non_pydantic_value_serialised_as_json(self, tmp_path):
+        """A transform step returning a plain string goes through json.dumps, not model_dump_json."""
+        yaml_text = """
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: data
+    type: transform
+    fn: tests.fixtures.steps:identity
+    inputs:
+      name: "Ada"
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run({"output_dir": str(out_dir)})
+        raw = (out_dir / "data.json").read_text()
+        assert json.loads(raw) == "Ada"
+
+    def test_final_as_returns_none_when_all_steps_skipped(self, tmp_path):
+        """_resolve_final_result returns None when every step is conditioned away."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "hi", "language": "en"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+  final_as: final.json
+
+steps:
+  - name: never
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    condition: "False"
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run({"name": "Ada", "output_dir": str(out_dir)})
+        # final_as should not be written when there is nothing to write
+        assert not (out_dir / "final.json").exists()
