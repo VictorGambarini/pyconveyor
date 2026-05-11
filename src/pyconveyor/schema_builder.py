@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import logging
 import re as _re
-from typing import Any, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 logger = logging.getLogger("pyconveyor.schema")
 
@@ -61,7 +64,7 @@ def _parse_type(type_str: str) -> tuple[type, Any]:
     return base, ...
 
 
-def _make_validator(field_rules: dict[str, dict]) -> Any | None:
+def _make_validator(field_rules: dict[str, dict[str, Any]]) -> Any | None:
     """Build a ``model_validator(mode='before')`` that enforces field-level rules.
 
     field_rules maps field name to a dict of constraint keys:
@@ -76,7 +79,7 @@ def _make_validator(field_rules: dict[str, dict]) -> Any | None:
 
     _rules = dict(field_rules)  # capture by value
 
-    def _check(cls, data: Any) -> Any:
+    def _check(cls: Any, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
 
@@ -133,7 +136,7 @@ def _make_validator(field_rules: dict[str, dict]) -> Any | None:
 
         return data
 
-    return model_validator(mode="before")(classmethod(_check))
+    return model_validator(mode="before")(classmethod(_check))  # type: ignore[arg-type]
 
 
 def _parse_rich_field(
@@ -259,7 +262,7 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
 
     annotations: dict[str, Any] = {}
     namespace: dict[str, Any] = {"__annotations__": annotations}
-    all_rules: dict[str, dict] = {}
+    all_rules: dict[str, dict[str, Any]] = {}
 
     for field_name, field_spec in field_map.items():
         if not isinstance(field_name, str):
@@ -300,7 +303,7 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
     if validator is not None:
         namespace["_pyconveyor_validate"] = validator
 
-    return type(name, (BaseModel,), namespace)  # type: ignore[return-value]
+    return type(name, (BaseModel,), namespace)
 
 
 # ── Schema hint rendering ─────────────────────────────────────────────────────
@@ -313,7 +316,7 @@ def _is_union_type(annotation: Any) -> bool:
     return get_origin(annotation) is Union or isinstance(annotation, _types.UnionType)
 
 
-def _get_nested_model(annotation: Any) -> type | None:
+def _get_nested_model(annotation: Any) -> type[BaseModel] | None:
     """If annotation is list[SomeBaseModel] (or Optional thereof), return SomeBaseModel."""
     from pydantic import BaseModel
 
@@ -379,7 +382,7 @@ def _type_to_description(annotation: Any) -> str:
     return "any value"
 
 
-def _render_fields(fields: dict, indent: int = 0) -> list[str]:
+def _render_fields(fields: dict[str, Any], indent: int = 0) -> list[str]:
     """Render field lines with optional description and nested model expansion."""
     prefix = "    " * indent
     lines: list[str] = []
