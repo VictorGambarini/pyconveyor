@@ -95,7 +95,7 @@ def _make_validator(
         for fname, vocab in _vocabs.items():
             v = data.get(fname)
             if v is not None and isinstance(v, str):
-                canonical, _match_type = vocab.match(v)
+                canonical, _ = vocab.match(v)
                 data[fname] = canonical
 
         # ── Field-level constraint rules ──────────────────────────────────────

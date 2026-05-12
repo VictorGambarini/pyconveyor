@@ -641,6 +641,13 @@ def _cmd_vocab_review(args: Any) -> None:
         except Exception as e:
             print(f"  Failed to load {entry.name}: {e} — skipping", file=sys.stderr)
             continue
+        if vocab.label in vocabs:
+            print(
+                f"  Warning: duplicate label '{vocab.label}' — "
+                f"keeping first, ignoring {entry.name}",
+                file=sys.stderr,
+            )
+            continue
         vocabs[vocab.label] = (vocab, entry)
 
     if not vocabs:
@@ -676,7 +683,7 @@ def _cmd_vocab_review(args: Any) -> None:
                 raw_value: str = str(pent.get("raw_value", ""))
                 vocab.add_term(raw_value)
             print(f"\n→ Auto-accepted all {len(pending)} terms into '{label}'.")
-            vocab.pending.clear()
+            pending.clear()
             vocab.save(vocab_path)
             continue
 
