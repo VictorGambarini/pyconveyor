@@ -197,6 +197,169 @@ class TestConditionStep:
         assert rctx.steps["skip_msg"].value == "skipped"
 
 
+# ── schema: {$ref: ...} ──────────────────────────────────────────────────────
+
+class TestSchemaRefFiles:
+    def test_llm_schema_ref_yaml_file(self, tmp_path: Path):
+        (tmp_path / "schemas").mkdir()
+        (tmp_path / "schemas" / "greeting.yaml").write_text(
+            "message: str\nlanguage: str\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "p.j2").write_text("say hi", encoding="utf-8")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"message": "Bonjour Ada!", "language": "French"}\'\n'
+            "steps:\n"
+            "  - name: greet\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            "    schema:\n"
+            "      $ref: schemas/greeting.yaml\n",
+            encoding="utf-8",
+        )
+
+        rctx = PipelineRunner(pipeline).run({})
+        assert not rctx.failed
+        assert rctx.steps["greet"].value.message == "Bonjour Ada!"
+
+    def test_llm_schema_ref_json_file(self, tmp_path: Path):
+        (tmp_path / "schemas").mkdir()
+        (tmp_path / "schemas" / "greeting.json").write_text(
+            '{"message": "str", "language": "str"}',
+            encoding="utf-8",
+        )
+        (tmp_path / "p.j2").write_text("say hi", encoding="utf-8")
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"message": "Bonjour Ada!", "language": "French"}\'\n'
+            "steps:\n"
+            "  - name: greet\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt: p.j2\n"
+            "    schema:\n"
+            "      $ref: schemas/greeting.json\n",
+            encoding="utf-8",
+        )
+
+        rctx = PipelineRunner(pipeline).run({})
+        assert not rctx.failed
+        assert rctx.steps["greet"].value.language == "French"
+
+
+# ── http step ────────────────────────────────────────────────────────────────
+
+class TestHttpStep:
+    def test_http_step_parses_json(self, tmp_path: Path, monkeypatch):
+        import httpx
+
+        calls: list[dict] = []
+
+        def _fake_request(**kwargs):
+            calls.append(kwargs)
+            return httpx.Response(
+                status_code=200,
+                json={"ok": True, "token": "abc"},
+                request=httpx.Request("GET", kwargs["url"]),
+            )
+
+        monkeypatch.setattr(httpx, "request", _fake_request)
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "steps:\n"
+            "  - name: fetch\n"
+            "    type: http\n"
+            "    url: \"{{ ctx.url }}\"\n"
+            "    headers:\n"
+            "      Authorization: \"Bearer {{ env.API_TOKEN }}\"\n"
+            "    params:\n"
+            "      q: \"{{ ctx.query }}\"\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("API_TOKEN", "secret-123")
+        rctx = PipelineRunner(pipeline).run({"url": "https://example.com", "query": "paper"})
+        assert not rctx.failed
+        assert rctx.steps["fetch"].value == {"ok": True, "token": "abc"}
+        assert calls[0]["headers"]["Authorization"] == "Bearer secret-123"
+        assert calls[0]["params"]["q"] == "paper"
+
+    def test_http_step_retries_on_5xx(self, tmp_path: Path, monkeypatch):
+        import httpx
+
+        count = {"n": 0}
+
+        def _fake_request(**kwargs):
+            count["n"] += 1
+            if count["n"] == 1:
+                return httpx.Response(
+                    status_code=503,
+                    text="temporary",
+                    request=httpx.Request("GET", kwargs["url"]),
+                )
+            return httpx.Response(
+                status_code=200,
+                json={"ok": True},
+                request=httpx.Request("GET", kwargs["url"]),
+            )
+
+        monkeypatch.setattr(httpx, "request", _fake_request)
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "steps:\n"
+            "  - name: fetch\n"
+            "    type: http\n"
+            "    url: https://example.com\n"
+            "    retries: 2\n"
+            "    backoff_seconds: 0\n",
+            encoding="utf-8",
+        )
+
+        rctx = PipelineRunner(pipeline).run({})
+        assert not rctx.failed
+        assert count["n"] == 2
+
+    def test_http_step_respects_expected_status(self, tmp_path: Path, monkeypatch):
+        import httpx
+
+        def _fake_request(**kwargs):
+            return httpx.Response(
+                status_code=409,
+                json={"status": "already_exists"},
+                request=httpx.Request("POST", kwargs["url"]),
+            )
+
+        monkeypatch.setattr(httpx, "request", _fake_request)
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "steps:\n"
+            "  - name: upsert\n"
+            "    type: http\n"
+            "    method: POST\n"
+            "    url: https://example.com\n"
+            "    expected_status: [200, 201, 409]\n",
+            encoding="utf-8",
+        )
+
+        rctx = PipelineRunner(pipeline).run({})
+        assert not rctx.failed
+        assert rctx.steps["upsert"].value["status"] == "already_exists"
+
 # ── Model overrides ───────────────────────────────────────────────────────────
 
 class TestModelOverrides:

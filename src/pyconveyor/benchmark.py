@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .runner import PipelineRunner
 from .steps.llm_step import AttemptLog
 
@@ -81,12 +83,12 @@ class BenchmarkRunner:
 
         benchmarks/
           case_001/
-            input.json    — pipeline input dict
-            expected.json — {step_name: {field: value, ...}, ...}
+                        input.yaml    — pipeline input dict (or input.json)
+                        expected.yaml — {step_name: {field: value, ...}, ...} (or expected.json)
           case_002/
             ...
 
-    Only steps present in ``expected.json`` are scored.  Any step not mentioned
+        Only steps present in ``expected.*`` are scored.  Any step not mentioned
     is silently ignored.  A step whose value is a Pydantic model is scored
     field-by-field; plain scalars and lists are compared with exact equality.
 
@@ -137,19 +139,62 @@ class BenchmarkRunner:
         for case_dir in sorted(self._benchmark_dir.iterdir()):
             if not case_dir.is_dir():
                 continue
-            input_file = case_dir / "input.json"
-            expected_file = case_dir / "expected.json"
-            if not input_file.exists() or not expected_file.exists():
+            input_payload = self._load_case_payload(case_dir, "input")
+            expected_payload = self._load_case_payload(case_dir, "expected")
+            if input_payload is None or expected_payload is None:
                 logger.debug(
-                    "Skipping %s: missing input.json or expected.json", case_dir.name
+                    "Skipping %s: missing input.{json,yaml,yml} or expected.{json,yaml,yml}",
+                    case_dir.name,
                 )
                 continue
             cases.append({
                 "name": case_dir.name,
-                "input": json.loads(input_file.read_text(encoding="utf-8")),
-                "expected": json.loads(expected_file.read_text(encoding="utf-8")),
+                "input": self._expand_file_refs(input_payload, case_dir),
+                "expected": expected_payload,
             })
         return cases
+
+    def _load_case_payload(self, case_dir: Path, stem: str) -> Any | None:
+        candidates = [
+            case_dir / f"{stem}.json",
+            case_dir / f"{stem}.yaml",
+            case_dir / f"{stem}.yml",
+        ]
+        existing = [p for p in candidates if p.exists()]
+        if not existing:
+            return None
+        if len(existing) > 1:
+            names = ", ".join(p.name for p in existing)
+            raise ValueError(
+                f"Case '{case_dir.name}' has multiple {stem} files ({names}); keep only one"
+            )
+
+        payload_file = existing[0]
+        text = payload_file.read_text(encoding="utf-8")
+        if payload_file.suffix == ".json":
+            return json.loads(text)
+        return yaml.safe_load(text)
+
+    def _expand_file_refs(self, value: Any, case_dir: Path) -> Any:
+        if isinstance(value, dict):
+            if set(value.keys()) == {"$file"}:
+                ref = value.get("$file")
+                if not isinstance(ref, str) or not ref.strip():
+                    raise ValueError(
+                        f"Case '{case_dir.name}': $file must be a non-empty string"
+                    )
+                file_path = Path(ref)
+                if not file_path.is_absolute():
+                    file_path = case_dir / file_path
+                if not file_path.exists():
+                    raise FileNotFoundError(
+                        f"Case '{case_dir.name}': referenced file not found: {file_path}"
+                    )
+                return file_path.read_text(encoding="utf-8")
+            return {k: self._expand_file_refs(v, case_dir) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._expand_file_refs(v, case_dir) for v in value]
+        return value
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

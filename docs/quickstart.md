@@ -220,8 +220,14 @@ Once you have some documents with known-correct outputs, benchmark your pipeline
 ```bash
 # Create a benchmark case
 mkdir -p benchmarks/case_001
-echo '{"document": "Invoice from Acme Corp, $4,250"}' > benchmarks/case_001/input.json
-echo '{"extract": {"vendor": "Acme Corp", "amount": 4250.0}}' > benchmarks/case_001/expected.json
+cat > benchmarks/case_001/input.yaml << 'EOF'
+document: "Invoice from Acme Corp, $4,250"
+EOF
+cat > benchmarks/case_001/expected.yaml << 'EOF'
+extract:
+  vendor: "Acme Corp"
+  amount: 4250.0
+EOF
 
 # Run the benchmark
 pyconveyor benchmark benchmarks/ --pipeline pipeline.yaml --report report.html
@@ -229,6 +235,7 @@ open report.html
 ```
 
 See the [Benchmarking guide](guides/benchmarking.md) for details.
+JSON benchmark files are also supported (`input.json` and `expected.json`).
 
 ---
 

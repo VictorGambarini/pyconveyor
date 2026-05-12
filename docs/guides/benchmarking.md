@@ -9,11 +9,11 @@ Benchmarking lets you measure how well a pipeline performs against a set of docu
 ```
 benchmarks/
 ├── case_invoice_001/
-│   ├── input.json      ← what you pass to the pipeline
-│   └── expected.json   ← the correct output you expect
+│   ├── input.yaml      ← what you pass to the pipeline (or input.json)
+│   └── expected.yaml   ← the correct output you expect (or expected.json)
 ├── case_invoice_002/
-│   ├── input.json
-│   └── expected.json
+│   ├── input.yaml
+│   └── expected.yaml
 └── ...
 ```
 
@@ -31,31 +31,30 @@ mkdir -p benchmarks/case_001
 
 ### 2. Write an input file
 
-```bash
-# benchmarks/case_001/input.json
-cat > benchmarks/case_001/input.json << 'EOF'
-{
-  "document": "Invoice #1042 from Acme Corp. Amount due: $4,250.00. Due date: 2024-03-15."
-}
-EOF
+```yaml
+# benchmarks/case_001/input.yaml
+document: "Invoice #1042 from Acme Corp. Amount due: $4,250.00. Due date: 2024-03-15."
+```
+
+For large inputs, use `$file` references (resolved relative to the case directory):
+
+```yaml
+doi: "10.1234/example"
+paper_markdown:
+  $file: paper.md
 ```
 
 ### 3. Write the expected output
 
-The keys in `expected.json` are step names. The values are the fields you want to check.
+The keys in `expected.yaml` are step names. The values are the fields you want to check.
 
-```bash
-# benchmarks/case_001/expected.json
-cat > benchmarks/case_001/expected.json << 'EOF'
-{
-  "extract": {
-    "invoice_number": "1042",
-    "vendor": "Acme Corp",
-    "amount": 4250.0,
-    "due_date": "2024-03-15"
-  }
-}
-EOF
+```yaml
+# benchmarks/case_001/expected.yaml
+extract:
+  invoice_number: "1042"
+  vendor: "Acme Corp"
+  amount: 4250.0
+  due_date: "2024-03-15"
 ```
 
 You don't have to cover all steps — only the ones you want to measure.
@@ -92,15 +91,16 @@ xdg-open report.html  # Linux
 ```
 benchmarks/
 └── <case_name>/        ← any directory name; used as the case label in the report
-    ├── input.json      ← required
-    └── expected.json   ← required
+  ├── input.yaml | input.yml | input.json         ← required (exactly one)
+  └── expected.yaml | expected.yml | expected.json ← required (exactly one)
 ```
 
-Cases are discovered by walking `benchmark_dir` and finding every directory that contains both `input.json` and `expected.json`.
+Cases are discovered by walking `benchmark_dir` and finding every directory that contains exactly one input file and one expected file.
+If a case has multiple formats for the same role (for example both `input.json` and `input.yaml`), benchmarking fails fast with a configuration error.
 
 ---
 
-## The `expected.json` format
+## The `expected.yaml` format
 
 ```json
 {
@@ -114,7 +114,7 @@ Cases are discovered by walking `benchmark_dir` and finding every directory that
 
 - **Pydantic model steps** — provide a dict of fields. Each field is scored independently and the step score is the mean of all field scores.
 - **Transform / io steps** — provide the exact scalar or dict value the step should return.
-- **Omitting a step** — steps not listed in `expected.json` are not scored (they don't affect accuracy).
+- **Omitting a step** — steps not listed in `expected.*` are not scored (they don't affect accuracy).
 
 ### Example: classification step
 

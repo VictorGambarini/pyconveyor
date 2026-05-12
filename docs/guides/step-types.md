@@ -1,6 +1,6 @@
 # Step Types
 
-pyconveyor has seven step types. Each serves a distinct role in the pipeline.
+pyconveyor has eight step types. Each serves a distinct role in the pipeline.
 
 | Type | Purpose |
 |---|---|
@@ -9,6 +9,7 @@ pyconveyor has seven step types. Each serves a distinct role in the pipeline.
 | `transform` | Pure Python function — no side effects |
 | `validate` | Gate: abort the pipeline if a condition isn't met |
 | `io` | Side effects — file writes, database calls, network requests |
+| `http` | Built-in HTTP requests with retries and structured responses |
 | `parallel` | Run child steps concurrently |
 | `condition` | Branch on a runtime expression |
 
@@ -34,7 +35,7 @@ steps:
 |---|---|---|
 | `model` | yes | Name of a model defined in the `models:` block |
 | `prompt` | yes | Path to a Jinja2 template (relative to the pipeline file) |
-| `schema` | no | `module:ClassName` — a Pydantic `BaseModel` subclass |
+| `schema` | no | `module:ClassName`, inline schema map, or `{ $ref: path/to/schema.yaml }` |
 | `parser` | no | `module:function` — transforms raw response before schema validation |
 | `system` | no | System prompt string (not a template path) |
 | `vars` | no | Extra variables injected into the prompt template |
@@ -236,6 +237,46 @@ def save_to_db(result, doc_id):
 ```
 
 `io` steps are intentionally last. The pipeline produces a result; the `io` step persists it. This keeps the runner's determinism guarantees intact for all earlier steps.
+
+---
+
+## `http`
+
+Use `http` when you want declarative API calls directly in YAML (without writing a Python `fn:` wrapper).
+
+```yaml
+steps:
+  - name: fetch_metadata
+    type: http
+    url: "https://api.example.com/works/{{ ctx.doi }}"
+    headers:
+      Authorization: "Bearer {{ env.API_TOKEN }}"
+    params:
+      include: "summary"
+```
+
+### Key fields
+
+| Field | Required | Description |
+|---|---|---|
+| `url` | yes | Request URL. Supports `{{ ... }}` expressions |
+| `method` | no | HTTP method (default: `GET`) |
+| `headers` | no | Header map. Values support templating |
+| `params` | no | Query parameter map. Values support templating |
+| `body` | no | JSON body (object/list/scalar). Supports nested templating |
+| `timeout_seconds` | no | Request timeout in seconds (default: `30`) |
+| `retries` | no | Retry count for network failures and 5xx responses (default: `2`) |
+| `backoff_seconds` | no | Base exponential backoff in seconds (default: `0.5`) |
+| `expected_status` | no | Allowed status codes. Default behavior accepts any 2xx |
+| `response_format` | no | `json` (default), `raw`, or `full` |
+
+### Response formats
+
+- `json`: returns parsed JSON body, fails if body is not valid JSON.
+- `raw`: returns response text.
+- `full`: returns `{ status, headers, body }`.
+
+Sensitive request headers are redacted in failure logs (`Authorization`, `X-API-Key`, `Cookie`, and common variants).
 
 ---
 
