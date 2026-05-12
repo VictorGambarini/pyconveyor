@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from dotenv import load_dotenv
@@ -38,6 +39,7 @@ from .expr import (
 from .llm import make_client
 from .steps.condition_step import execute_condition_step
 from .steps.ensemble_step import execute_ensemble_step
+from .steps.http_step import execute_http_step
 from .steps.llm_step import AttemptLog, execute_llm_step
 from .steps.parallel_step import execute_parallel_step
 from .steps.script_step import execute_script_step
@@ -215,6 +217,7 @@ class RunContext:
         return {
             "ctx": _NullSafeProxy(self._input),
             "steps": _StepsProxy(raw_values),
+            "env": _NullSafeProxy(dict(os.environ)),
         }
 
 
@@ -461,6 +464,7 @@ class PipelineRunner:
                 {
                     "ctx": rctx._input,
                     "steps": {n: sr.value for n, sr in rctx._step_results.items()},
+                    "env": dict(os.environ),
                 }
             )
             if self._vocabularies:
@@ -492,6 +496,22 @@ class PipelineRunner:
                 resolved_inputs=resolved_inputs,
                 fn=fn,
                 rctx=rctx,
+                dry_run=dry_run,
+            )
+            return result, []
+
+        elif stype == "http":
+            request_spec = {
+                "method": step.get("method", "GET"),
+                "url": step.get("url", ""),
+                "headers": step.get("headers", {}),
+                "params": step.get("params", {}),
+                "body": step.get("body"),
+            }
+            resolved_request = self._resolve_data(request_spec, expr_ctx)
+            result = execute_http_step(
+                step=step,
+                resolved_request=resolved_request,
                 dry_run=dry_run,
             )
             return result, []
@@ -763,7 +783,14 @@ class PipelineRunner:
     # ── Input resolution ───────────────────────────────────────────────────────
 
     def _resolve_inputs(self, inputs: dict[str, Any], expr_ctx: dict[str, Any]) -> dict[str, Any]:
-        return {k: resolve_value(v, expr_ctx, str(self._path)) for k, v in inputs.items()}
+        return cast(dict[str, Any], self._resolve_data(inputs, expr_ctx))
+
+    def _resolve_data(self, value: Any, expr_ctx: dict[str, Any]) -> Any:
+        if isinstance(value, dict):
+            return {k: self._resolve_data(v, expr_ctx) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._resolve_data(v, expr_ctx) for v in value]
+        return resolve_value(value, expr_ctx, str(self._path))
 
     # ── Model / client helpers ─────────────────────────────────────────────────
 
@@ -1002,6 +1029,58 @@ class PipelineRunner:
                 # Validate inputs expressions
                 validate_all_expressions(step.get("inputs", {}), file_str, f"{key_base}.inputs")
 
+            elif stype == "http":
+                url = step.get("url")
+                if not isinstance(url, str) or not url.strip():
+                    raise StepConfigError(
+                        f"Step '{name}' (type=http) is missing required field 'url'",
+                        file=file_str,
+                        key_path=f"{key_base}.url",
+                    )
+                method = step.get("method", "GET")
+                if not isinstance(method, str) or not method.strip():
+                    raise StepConfigError(
+                        f"Step '{name}' (type=http): method must be a non-empty string",
+                        file=file_str,
+                        key_path=f"{key_base}.method",
+                    )
+                response_format = step.get("response_format", "json")
+                if response_format not in ("json", "raw", "full"):
+                    raise StepConfigError(
+                        f"Step '{name}' (type=http): response_format must be one of 'json', 'raw', 'full'",
+                        file=file_str,
+                        key_path=f"{key_base}.response_format",
+                    )
+                expected_status = step.get("expected_status")
+                if expected_status is not None and (
+                    not isinstance(expected_status, list)
+                    or not all(isinstance(code, int) for code in expected_status)
+                ):
+                    raise StepConfigError(
+                        f"Step '{name}' (type=http): expected_status must be a list of integers",
+                        file=file_str,
+                        key_path=f"{key_base}.expected_status",
+                    )
+                retries = step.get("retries", 2)
+                if not isinstance(retries, int) or retries < 0:
+                    raise StepConfigError(
+                        f"Step '{name}' (type=http): retries must be an integer >= 0",
+                        file=file_str,
+                        key_path=f"{key_base}.retries",
+                    )
+                timeout_seconds = step.get("timeout_seconds", 30)
+                if not isinstance(timeout_seconds, int | float) or timeout_seconds <= 0:
+                    raise StepConfigError(
+                        f"Step '{name}' (type=http): timeout_seconds must be > 0",
+                        file=file_str,
+                        key_path=f"{key_base}.timeout_seconds",
+                    )
+
+                validate_all_expressions(step.get("url", ""), file_str, f"{key_base}.url")
+                validate_all_expressions(step.get("headers", {}), file_str, f"{key_base}.headers")
+                validate_all_expressions(step.get("params", {}), file_str, f"{key_base}.params")
+                validate_all_expressions(step.get("body"), file_str, f"{key_base}.body")
+
             elif stype == "parallel":
                 children = step.get("steps", [])
                 self._validate_steps(
@@ -1203,16 +1282,25 @@ class PipelineRunner:
         schema_ref = step.get("schema")
         if schema_ref is not None:
             if isinstance(schema_ref, dict):
-                from .schema_builder import yaml_dict_to_model
+                if "$ref" in schema_ref:
+                    step["_schema_cls"] = _load_schema_from_ref(
+                        schema_ref,
+                        pipeline_path=self._path,
+                        step_name=step["name"],
+                        file_str=file_str,
+                        key_path=f"{key_base}.schema",
+                    )
+                else:
+                    from .schema_builder import yaml_dict_to_model
 
-                model_name = _inline_schema_name(step["name"])
-                try:
-                    schema_cls = yaml_dict_to_model(model_name, schema_ref)
-                except Exception as e:
-                    raise SchemaRefError(
-                        str(e), file=file_str, key_path=f"{key_base}.schema"
-                    ) from e
-                step["_schema_cls"] = schema_cls
+                    model_name = _inline_schema_name(step["name"])
+                    try:
+                        schema_cls = yaml_dict_to_model(model_name, schema_ref)
+                    except Exception as e:
+                        raise SchemaRefError(
+                            str(e), file=file_str, key_path=f"{key_base}.schema"
+                        ) from e
+                    step["_schema_cls"] = schema_cls
             else:
                 try:
                     schema_cls = _import_schema(schema_ref, file_str, f"{key_base}.schema")
@@ -1358,3 +1446,88 @@ def _import_schema(ref: str, file_str: str, key_path: str) -> type:
             key_path=key_path,
         )
     return cls
+
+
+def _load_schema_from_ref(
+    schema_ref: dict[str, Any],
+    pipeline_path: Path,
+    step_name: str,
+    file_str: str,
+    key_path: str,
+) -> type:
+    from .schema_builder import yaml_dict_to_model
+
+    if set(schema_ref.keys()) != {"$ref"}:
+        raise SchemaRefError(
+            "schema $ref object must contain only the '$ref' key",
+            file=file_str,
+            key_path=key_path,
+        )
+
+    ref_value = schema_ref.get("$ref")
+    if not isinstance(ref_value, str) or not ref_value.strip():
+        raise SchemaRefError(
+            "schema.$ref must be a non-empty string",
+            file=file_str,
+            key_path=f"{key_path}.$ref",
+        )
+
+    schema_path = Path(ref_value)
+    if not schema_path.is_absolute():
+        schema_path = pipeline_path.parent / schema_path
+    if not schema_path.exists():
+        raise SchemaRefError(
+            f"schema file not found: {schema_path}",
+            file=file_str,
+            key_path=f"{key_path}.$ref",
+        )
+
+    try:
+        raw_text = schema_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SchemaRefError(
+            f"failed to read schema file: {schema_path} ({exc})",
+            file=file_str,
+            key_path=f"{key_path}.$ref",
+        ) from exc
+
+    try:
+        if schema_path.suffix.lower() == ".json":
+            schema_def = json.loads(raw_text)
+        elif schema_path.suffix.lower() in {".yaml", ".yml"}:
+            schema_def = yaml.safe_load(raw_text)
+        else:
+            raise SchemaRefError(
+                "schema.$ref must point to a .yaml, .yml, or .json file",
+                file=file_str,
+                key_path=f"{key_path}.$ref",
+            )
+    except json.JSONDecodeError as exc:
+        raise SchemaRefError(
+            f"invalid JSON in schema file {schema_path}: {exc}",
+            file=file_str,
+            key_path=f"{key_path}.$ref",
+        ) from exc
+    except yaml.YAMLError as exc:
+        raise SchemaRefError(
+            f"invalid YAML in schema file {schema_path}: {exc}",
+            file=file_str,
+            key_path=f"{key_path}.$ref",
+        ) from exc
+
+    if not isinstance(schema_def, dict):
+        raise SchemaRefError(
+            "schema file referenced by $ref must contain a mapping",
+            file=file_str,
+            key_path=f"{key_path}.$ref",
+        )
+
+    model_name = _inline_schema_name(step_name)
+    try:
+        return yaml_dict_to_model(model_name, schema_def)
+    except Exception as exc:
+        raise SchemaRefError(
+            str(exc),
+            file=file_str,
+            key_path=f"{key_path}.$ref",
+        ) from exc

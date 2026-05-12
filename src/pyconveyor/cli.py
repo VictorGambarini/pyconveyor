@@ -835,7 +835,15 @@ def _pipeline_jsonschema() -> dict[str, Any]:
                     "name": {"type": "string"},
                     "type": {
                         "type": "string",
-                        "enum": ["llm", "transform", "io", "validate", "parallel", "condition"],
+                        "enum": [
+                            "llm",
+                            "transform",
+                            "io",
+                            "validate",
+                            "parallel",
+                            "condition",
+                            "http",
+                        ],
                         "default": "llm",
                     },
                     "model": {"type": "string"},
@@ -844,6 +852,15 @@ def _pipeline_jsonschema() -> dict[str, Any]:
                     "schema": {
                         "oneOf": [
                             {"type": "string", "description": "module:ClassName reference"},
+                            {
+                                "type": "object",
+                                "description": "External schema file reference",
+                                "properties": {
+                                    "$ref": {"type": "string"}
+                                },
+                                "required": ["$ref"],
+                                "additionalProperties": False,
+                            },
                             {
                                 "type": "object",
                                 "description": "Inline field map. Values: str, int, float, bool, list[T], dict[str,T], T|None",
@@ -855,6 +872,23 @@ def _pipeline_jsonschema() -> dict[str, Any]:
                     "vars": {"type": "object"},
                     "inputs": {"type": "object"},
                     "fn": {"type": "string"},
+                    "method": {"type": "string", "default": "GET"},
+                    "url": {"type": "string"},
+                    "headers": {"type": "object"},
+                    "params": {"type": "object"},
+                    "body": {},
+                    "timeout_seconds": {"type": "number", "default": 30},
+                    "expected_status": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                    },
+                    "response_format": {
+                        "type": "string",
+                        "enum": ["json", "raw", "full"],
+                        "default": "json",
+                    },
+                    "retries": {"type": "integer", "default": 2, "minimum": 0},
+                    "backoff_seconds": {"type": "number", "default": 0.5, "minimum": 0},
                     "if": {"type": "string"},
                     "then": {},
                     "else": {},

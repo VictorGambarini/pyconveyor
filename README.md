@@ -112,6 +112,15 @@ Every `llm` step validates the model's response against a schema. If validation 
   on_error: continue   # "raise" | "continue" | "skip_remaining"
 ```
 
+You can also reference external schema files directly:
+
+```yaml
+- name: extract
+  type: llm
+  schema:
+    $ref: schemas/article_summary.yaml
+```
+
 ### All step types
 
 | Step type | What it does |
@@ -121,6 +130,7 @@ Every `llm` step validates the model's response against a schema. If validation 
 | `transform` | Call a Python function with step outputs as inputs |
 | `validate` | Assert a condition; fail or skip remaining steps if it's false |
 | `io` | Call a Python function for side effects (DB write, file save) |
+| `http` | Make declarative HTTP API calls with retries and status checks |
 | `parallel` | Run multiple sub-pipelines concurrently |
 | `condition` | Branch to different steps based on a runtime expression |
 
@@ -155,6 +165,9 @@ pyconveyor benchmark benchmarks/ \
 
 open comparison.html
 ```
+
+Benchmark cases support both YAML and JSON (`input.yaml`/`input.json`, `expected.yaml`/`expected.json`).
+For large inputs, use `$file` references inside input payloads (for example `paper: { $file: paper.md }`).
 
 The report includes per-step accuracy tables, a pipeline comparison delta, a Mermaid graph with accuracy annotations, Chart.js bar charts, and a per-case collapsible breakdown.
 

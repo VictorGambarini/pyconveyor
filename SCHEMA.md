@@ -154,7 +154,7 @@ All step types share these fields:
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `name` | string | yes | — | Unique identifier for this step. Referenced in expressions as `steps.<name>`. |
-| `type` | string | no | `llm` | One of `llm`, `ensemble`, `transform`, `io`, `validate`, `parallel`, `condition` |
+| `type` | string | no | `llm` | One of `llm`, `ensemble`, `transform`, `io`, `http`, `validate`, `parallel`, `condition` |
 | `condition` | expression | no | — | Skip this step if expression evaluates falsy |
 | `on_error` | string | no | `raise` | One of `raise`, `continue`, `skip_remaining` |
 | `on_failure` | string | no | — | Dotted import path `module:fn` called on error: `fn(step_name, exc, rctx)` |
@@ -170,7 +170,7 @@ All step types share these fields:
 | `model` | string | yes | — | Must match a key under `models:` |
 | `prompt` | string | yes | — | Jinja2 template filename (resolved relative to the pipeline file) |
 | `system` | string | no | — | System message. Inline string or `{{ expression }}`. |
-| `schema` | string | no | — | Dotted import path `module:ClassName` for a Pydantic model |
+| `schema` | string or map | no | — | `module:ClassName`, inline map, or `{ $ref: path/to/schema.yaml }` |
 | `parser` | string | no | — | Named parser key from top-level `parsers:`, or `module:fn` |
 | `vars` | map | no | — | Extra template variables. Values may be `{{ expressions }}`. |
 | `max_attempts` | integer | no | `3` if schema set else `1` | Retry budget |
@@ -192,6 +192,33 @@ steps:
     max_attempts: 3
     vars:
       focus: "{{ ctx.focus_area }}"
+```
+
+---
+
+## HTTP step (`type: http`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `url` | string | yes | — | Request URL; supports `{{ expression }}` values |
+| `method` | string | no | `GET` | HTTP method |
+| `headers` | map | no | `{}` | Request headers; values support templating |
+| `params` | map | no | `{}` | Query params; values support templating |
+| `body` | any | no | — | JSON body; nested templating supported |
+| `timeout_seconds` | number | no | `30` | Request timeout in seconds |
+| `expected_status` | list[int] | no | 2xx | Allowed status codes |
+| `response_format` | string | no | `json` | One of `json`, `raw`, `full` |
+| `retries` | integer | no | `2` | Retries for network errors and 5xx responses |
+| `backoff_seconds` | number | no | `0.5` | Base exponential backoff delay |
+
+**Example:**
+```yaml
+steps:
+  - name: fetch
+    type: http
+    url: "https://api.example.com/items/{{ ctx.id }}"
+    headers:
+      Authorization: "Bearer {{ env.API_TOKEN }}"
 ```
 
 ---

@@ -39,6 +39,50 @@ class TestCaseDiscovery:
         runner = BenchmarkRunner(tmp_path, pipelines=[PIPELINES / "hello.yaml"])
         assert runner._cases == []
 
+    def test_discovers_yaml_case_files(self, tmp_path: Path):
+        case = tmp_path / "case_yaml"
+        case.mkdir()
+        (case / "input.yaml").write_text('name: "Ada"\nlanguage: "French"\n')
+        (case / "expected.yaml").write_text(
+            'greet:\n  message: "Bonjour Ada!"\n  language: "French"\n'
+        )
+
+        runner = BenchmarkRunner(tmp_path, pipelines=[PIPELINES / "hello.yaml"])
+        assert len(runner._cases) == 1
+        assert runner._cases[0]["name"] == "case_yaml"
+
+    def test_raises_when_multiple_input_formats_exist(self, tmp_path: Path):
+        case = tmp_path / "case_conflict"
+        case.mkdir()
+        (case / "input.json").write_text('{"name":"Ada"}')
+        (case / "input.yaml").write_text('name: "Ada"\n')
+        (case / "expected.json").write_text('{"greet": {"message": "x", "language": "y"}}')
+
+        with pytest.raises(ValueError, match="multiple input files"):
+            BenchmarkRunner(tmp_path, pipelines=[PIPELINES / "hello.yaml"])
+
+    def test_input_file_ref_expands_markdown_text(self, tmp_path: Path):
+        case = tmp_path / "case_file"
+        case.mkdir()
+        (case / "paper.md").write_text("# Title\nBody")
+        (case / "input.yaml").write_text(
+            "name: Ada\n"
+            "language: French\n"
+            "paper:\n"
+            "  $file: paper.md\n"
+            "nested:\n"
+            "  refs:\n"
+            "    - $file: paper.md\n"
+        )
+        (case / "expected.yaml").write_text(
+            'greet:\n  message: "Bonjour Ada!"\n  language: "French"\n'
+        )
+
+        runner = BenchmarkRunner(tmp_path, pipelines=[PIPELINES / "hello.yaml"])
+        loaded = runner._cases[0]["input"]
+        assert loaded["paper"] == "# Title\nBody"
+        assert loaded["nested"]["refs"][0] == "# Title\nBody"
+
 
 # ── BenchmarkRunner — scoring ──────────────────────────────────────────────────
 
