@@ -53,4 +53,4 @@ __all__ = [
     "generate_report",
 ]
 
-__version__ = "1.2.0"
+__version__ = "1.6.0"
