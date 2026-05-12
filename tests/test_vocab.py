@@ -497,18 +497,19 @@ class TestVocabGrowthPolicy:
 
 class TestVocabFileLoading:
     def test_vocabulary_loaded_from_file(self, tmp_path):
-        """Runner loads vocab from path declared in pipeline vocabularies: block."""
+        """Runner loads vocab from vocabularies/ directory relative to pipeline."""
         from pydantic import BaseModel
 
         from pyconveyor import PipelineRunner
         from pyconveyor.vocab import VocabField, Vocabulary
 
+        # Place vocab file in vocabularies/ relative to pipeline dir
         vocab_dir = tmp_path / "vocabularies"
         vocab_dir.mkdir()
         vocab_file = vocab_dir / "plastic_type.yaml"
         Vocabulary(known={"PET", "PE"}, label="plastic_type").save(vocab_file)
 
-        # Schema using string ref
+        # Schema using string ref — resolved via vocabularies/ directory auto-load
         class RefRecord(BaseModel):
             plastic: str = VocabField(vocab="plastic_type")
             quantity: int
@@ -525,8 +526,6 @@ class TestVocabFileLoading:
             "    model: mock-model\n"
             "    mock_responses:\n"
             "      - '{\"plastic\": \"pet\", \"quantity\": 2}'\n"
-            "vocabularies:\n"
-            "  plastic_type: vocabularies/plastic_type.yaml\n"
             "steps:\n"
             "  - name: extract\n"
             "    type: llm\n"
@@ -650,8 +649,6 @@ class TestVocabCliReview:
         pipeline = tmp_path / "pipeline.yaml"
         pipeline.write_text(
             "models:\n  default:\n    provider: mock\n    model: m\n    mock_responses: ['\"x\"']\n"
-            "vocabularies:\n"
-            "  plastic_type: vocabularies/plastic_type.yaml\n"
             "steps:\n  - name: s\n    type: llm\n    model: default\n    prompt_string: 'x'\n"
         )
 
@@ -678,8 +675,6 @@ class TestVocabCliReview:
         pipeline = tmp_path / "pipeline.yaml"
         pipeline.write_text(
             "models:\n  default:\n    provider: mock\n    model: m\n    mock_responses: ['\"x\"']\n"
-            "vocabularies:\n"
-            "  plastic_type: vocabularies/plastic_type.yaml\n"
             "steps:\n  - name: s\n    type: llm\n    model: default\n    prompt_string: 'x'\n"
         )
 
@@ -869,3 +864,320 @@ class TestVocabAdditionalCoverage:
             runner.run({})
 
         assert "HDPE" not in vocab.known
+
+
+# ── Vocab in YAML schemas — integration tests ──────────────────────────────────
+
+
+class TestVocabInSchemasIntegration:
+    """End-to-end tests for vocabs defined inline in YAML schema fields."""
+
+    def test_inline_vocab_normalizes_llm_output(self, tmp_path):
+        from pyconveyor import PipelineRunner
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"pet\", \"quantity\": 3}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      plastic:\n"
+            "        type: str\n"
+            "        vocab:\n"
+            "          known: [PET, PE, PLA]\n"
+            "      quantity: int\n"
+            "    max_attempts: 1\n"
+        )
+        runner = PipelineRunner(pipeline)
+        rctx = runner.run({})
+        assert not rctx.failed
+        result = rctx.steps["extract"].value
+        assert result.plastic == "PET"
+
+    def test_inline_vocab_creates_suggestion_for_novel(self, tmp_path):
+        from pyconveyor import PipelineRunner
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"PVC\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      plastic:\n"
+            "        type: str\n"
+            "        vocab:\n"
+            "          known: [PET, PE]\n"
+            "      quantity: int\n"
+            "    max_attempts: 1\n"
+        )
+        runner = PipelineRunner(pipeline)
+        rctx = runner.run({})
+        assert not rctx.failed
+        assert len(rctx._vocab_suggestions) == 1
+        s = rctx._vocab_suggestions[0]
+        assert s.raw_value == "PVC"
+        assert s.match_type == "novel"
+
+    def test_inline_vocab_auto_growth_adds_term(self, tmp_path):
+        from pyconveyor import PipelineRunner
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"HDPE\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      plastic:\n"
+            "        type: str\n"
+            "        vocab:\n"
+            "          known: [PET, PE]\n"
+            "          growth_policy: auto\n"
+            "      quantity: int\n"
+            "    max_attempts: 1\n"
+        )
+        runner = PipelineRunner(pipeline)
+        rctx = runner.run({})
+        assert not rctx.failed
+        # Growth policy "auto" should add HDPE to known
+        extra = rctx.steps["extract"].value.model_fields["plastic"].json_schema_extra
+        vocab = extra["_pyconveyor_vocab"]
+        assert "HDPE" in vocab.known
+
+    def test_file_vocab_loaded_from_vocabularies_dir(self, tmp_path):
+        from pyconveyor import PipelineRunner
+        from pyconveyor.vocab import Vocabulary
+
+        # Place vocab file in vocabularies/
+        vocab_dir = tmp_path / "vocabularies"
+        vocab_dir.mkdir()
+        vocab_file = vocab_dir / "plastic.yaml"
+        Vocabulary(
+            known={"PET", "PE"}, label="plastic",
+            description="Resin codes",
+        ).save(vocab_file)
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"pet\", \"quantity\": 2}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      plastic:\n"
+            "        type: str\n"
+            "        vocab: plastic\n"
+            "      quantity: int\n"
+            "    max_attempts: 1\n"
+        )
+        runner = PipelineRunner(pipeline)
+        rctx = runner.run({})
+        assert not rctx.failed
+        result = rctx.steps["extract"].value
+        assert result.plastic == "PET"
+
+    def test_file_vocab_ref_resolves_description(self, tmp_path):
+        """Vocab file description should be stored on the resolved vocab."""
+        from pyconveyor import PipelineRunner
+        from pyconveyor.vocab import Vocabulary
+
+        vocab_dir = tmp_path / "vocabularies"
+        vocab_dir.mkdir()
+        vocab_file = vocab_dir / "color.yaml"
+        Vocabulary(
+            known={"red", "green"}, label="color",
+            description="Valid color names",
+        ).save(vocab_file)
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"color\": \"red\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      color:\n"
+            "        type: str\n"
+            "        vocab: color\n"
+            "      quantity: int\n"
+            "    max_attempts: 1\n"
+        )
+        runner = PipelineRunner(pipeline)
+        rctx = runner.run({})
+        assert not rctx.failed
+        # Check that the vocab description is on the field's json_schema_extra
+        extra = rctx.steps["extract"].value.model_fields["color"].json_schema_extra
+        assert extra["_pyconveyor_vocab"].description == "Valid color names"
+
+    def test_vocab_prompt_injection_filtered_to_schema(self, tmp_path):
+        """Only vocabs referenced by the schema appear in the prompt."""
+        from unittest.mock import patch
+
+        from pyconveyor import PipelineRunner
+
+        # Create both a plastic vocab file AND a color vocab file
+        vocab_dir = tmp_path / "vocabularies"
+        vocab_dir.mkdir()
+        (vocab_dir / "plastic.yaml").write_text(
+            "label: plastic\nknown:\n  - PET\n  - PE\n"
+        )
+        (vocab_dir / "color.yaml").write_text(
+            "label: color\nknown:\n  - red\n  - green\n"
+        )
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"PET\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      plastic:\n"
+            "        type: str\n"
+            "        vocab: plastic\n"
+            "      quantity: int\n"
+            "    max_attempts: 1\n"
+        )
+
+        captured_messages: list = []
+
+        def fake_call_llm(client, messages, model, **kwargs):
+            captured_messages.extend(messages)
+            return '{"plastic": "PET", "quantity": 1}', None
+
+        with patch("pyconveyor.steps.llm_step.call_llm", side_effect=fake_call_llm):
+            runner = PipelineRunner(pipeline)
+            runner.run({})
+
+        prompt_text = " ".join(m.get("content", "") for m in captured_messages)
+        # Should contain plastic vocab (referenced by schema)
+        assert "plastic" in prompt_text
+        # Should NOT contain color vocab (not referenced by schema)
+        assert "color" not in prompt_text
+
+    def test_no_vocab_injected_when_schema_has_no_vocab_fields(self, tmp_path):
+        """When schema exists but has no vocab fields, no vocab hints are injected."""
+        from unittest.mock import patch
+
+        from pyconveyor import PipelineRunner
+
+        vocab_dir = tmp_path / "vocabularies"
+        vocab_dir.mkdir()
+        (vocab_dir / "unused.yaml").write_text(
+            "label: unused\nknown:\n  - A\n  - B\n"
+        )
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"name\": \"test\", \"quantity\": 1}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      name: str\n"
+            "      quantity: int\n"
+            "    max_attempts: 1\n"
+        )
+
+        captured_messages: list = []
+
+        def fake_call_llm(client, messages, model, **kwargs):
+            captured_messages.extend(messages)
+            return '{"name": "test", "quantity": 1}', None
+
+        with patch("pyconveyor.steps.llm_step.call_llm", side_effect=fake_call_llm):
+            runner = PipelineRunner(pipeline)
+            runner.run({})
+
+        prompt_text = " ".join(m.get("content", "") for m in captured_messages)
+        assert "Vocabulary constraint" not in prompt_text
+        assert "unused" not in prompt_text
+
+    def test_inline_vocab_in_schema_file_referenced_by_ref(self, tmp_path):
+        """A vocab in a $ref'd schema file works end-to-end."""
+        from pyconveyor import PipelineRunner
+
+        # Write the schema file referenced by $ref
+        schema_file = tmp_path / "schemas" / "extract.yaml"
+        schema_file.parent.mkdir()
+        schema_file.write_text(
+            "plastic:\n"
+            "  type: str\n"
+            "  vocab:\n"
+            "    known: [PET, PE, PLA]\n"
+            "quantity: int\n"
+        )
+
+        pipeline = tmp_path / "pipeline.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  default:\n"
+            "    provider: mock\n"
+            "    model: mock-model\n"
+            "    mock_responses:\n"
+            "      - '{\"plastic\": \"pet\", \"quantity\": 3}'\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: default\n"
+            "    prompt_string: 'Extract.'\n"
+            "    schema:\n"
+            "      $ref: schemas/extract.yaml\n"
+            "    max_attempts: 1\n"
+        )
+        runner = PipelineRunner(pipeline)
+        rctx = runner.run({})
+        assert not rctx.failed
+        result = rctx.steps["extract"].value
+        assert result.plastic == "PET"

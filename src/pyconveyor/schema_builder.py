@@ -64,25 +64,41 @@ def _parse_type(type_str: str) -> tuple[type, Any]:
     return base, ...
 
 
-def _make_validator(field_rules: dict[str, dict[str, Any]]) -> Any | None:
-    """Build a ``model_validator(mode='before')`` that enforces field-level rules.
+def _make_validator(
+    field_rules: dict[str, dict[str, Any]],
+    vocab_fields: dict[str, Any] | None = None,
+) -> Any | None:
+    """Build a ``model_validator(mode='before')`` that normalises vocab fields
+    and enforces field-level validation rules.
 
     field_rules maps field name to a dict of constraint keys:
     ``pattern``, ``min_length``, ``max_length``, ``min_items``, ``max_items``, ``on_fail``.
 
-    Returns None when there are no rules to enforce.
+    vocab_fields maps field name to a ``Vocabulary`` instance for vocab normalisation.
+    Vocab normalisation runs before constraint checks.
+
+    Returns None when there are no rules to enforce and no vocabs to normalise.
     """
-    if not field_rules:
+    if not field_rules and not vocab_fields:
         return None
 
     from pydantic import model_validator
 
     _rules = dict(field_rules)  # capture by value
+    _vocabs = dict(vocab_fields or {})  # capture by value
 
     def _check(cls: Any, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
 
+        # ── Vocab normalisation (runs first) ──────────────────────────────────
+        for fname, vocab in _vocabs.items():
+            v = data.get(fname)
+            if v is not None and isinstance(v, str):
+                canonical, _match_type = vocab.match(v)
+                data[fname] = canonical
+
+        # ── Field-level constraint rules ──────────────────────────────────────
         for fname, rules in _rules.items():
             _raw_on_fail = rules.get("on_fail", "error")
             # YAML `on_fail: null` deserialises to Python None; treat as "null".
@@ -143,6 +159,7 @@ def _parse_rich_field(
     name: str,
     field_def: dict[str, Any],
     parent_name: str,
+    vocabularies: dict[str, Any] | None = None,
 ) -> tuple[type, Any, dict[str, Any]]:
     """Parse a rich field definition dict.
 
@@ -152,6 +169,7 @@ def _parse_rich_field(
     from pydantic import Field
 
     from .errors import SchemaRefError
+    from .vocab import Vocabulary
 
     type_str: str | None = field_def.get("type")
     if type_str is None:
@@ -159,6 +177,7 @@ def _parse_rich_field(
 
     description: str | None = field_def.get("description")
     items: Any = field_def.get("items")  # str (primitive) | dict (sub-schema) | None
+    vocab: Any = field_def.get("vocab")  # str (file ref) | dict (inline def) | None
 
     # Determine whether this is a bare "list" needing an items: block
     _ts = type_str.strip()
@@ -168,7 +187,9 @@ def _parse_rich_field(
     if _bare == "list" and items is not None:
         if isinstance(items, dict):
             # list of sub-objects — recurse
-            sub_model = yaml_dict_to_model(f"{parent_name}_{name}_item", items)
+            sub_model = yaml_dict_to_model(
+                f"{parent_name}_{name}_item", items, vocabularies=vocabularies
+            )
             base_type: type = list[sub_model]  # type: ignore[valid-type]
         elif isinstance(items, str):
             inner = _PRIMITIVES.get(items)
@@ -194,6 +215,40 @@ def _parse_rich_field(
     field_kwargs: dict[str, Any] = {}
     if description is not None:
         field_kwargs["description"] = description
+
+    json_schema_extra: dict[str, Any] = {}
+    if vocab is not None:
+        if isinstance(vocab, str):
+            # File-based vocab reference — resolved later in yaml_dict_to_model
+            json_schema_extra["_pyconveyor_vocab_ref"] = vocab
+        elif isinstance(vocab, dict):
+            # Inline vocab definition
+            vocab_dict = dict(vocab)
+            if "label" not in vocab_dict:
+                vocab_dict["label"] = name
+            # Inline vocabs only support growth_policy="auto"
+            gp = vocab_dict.get("growth_policy", "auto")
+            if gp not in ("auto",):
+                raise SchemaRefError(
+                    f"Field '{name}': inline vocab must use growth_policy='auto', "
+                    f"got {gp!r}. Use a file-based vocab for growth_policy='{gp}'."
+                )
+            if "persist" in vocab_dict:
+                raise SchemaRefError(
+                    f"Field '{name}': inline vocabs do not support 'persist'. "
+                    "Use a file-based vocab for persistence."
+                )
+            vocab_dict["growth_policy"] = "auto"
+            vocab_obj = Vocabulary.from_dict(vocab_dict)
+            json_schema_extra["_pyconveyor_vocab"] = vocab_obj
+        else:
+            raise SchemaRefError(
+                f"Field '{name}': 'vocab' must be a string (file reference) or "
+                f"a mapping (inline definition), got {type(vocab).__name__}."
+            )
+    if json_schema_extra:
+        field_kwargs["json_schema_extra"] = json_schema_extra
+
     field_info = Field(default, **field_kwargs)
 
     # Collect validation rules (passed later to _make_validator)
@@ -205,7 +260,11 @@ def _parse_rich_field(
     return python_type, field_info, rules
 
 
-def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
+def yaml_dict_to_model(
+    name: str,
+    field_map: dict[str, Any],
+    vocabularies: dict[str, Any] | None = None,
+) -> type:
     """Build and return a pydantic.BaseModel subclass from a YAML field map.
 
     Accepts both the simple string format and the rich dict format:
@@ -214,7 +273,7 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
 
         {"title": "str", "score": "int | None"}
 
-    Rich (new — adds description, vocab hint, and validation)::
+    Rich (adds description, vocab, and validation)::
 
         {
           "title": {
@@ -222,9 +281,15 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
             "description": "The paper title",
             "min_length": 1,
           },
-          "score": {
-            "type": "int | None",
-            "description": "Confidence score 0–100",
+          "plastic": {
+            "type": "str",
+            "vocab": "plastic",          # file ref → vocabularies/plastic.yaml
+          },
+          "color": {
+            "type": "str",
+            "vocab": {                    # inline definition (growth_policy="auto" only)
+              "known": ["red", "green", "blue"],
+            },
           },
         }
 
@@ -246,9 +311,17 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
     ``"error"`` (default — raise, triggers retry), ``"null"`` (coerce to null silently),
     ``"warn"`` (log warning, keep value).
 
+    When ``vocab`` is set and ``vocabularies`` is provided, string references are
+    resolved against *vocabularies* and the resolved ``Vocabulary`` is stored on
+    the field's ``json_schema_extra`` as ``_pyconveyor_vocab``.
+
+    Vocab normalisation is baked into the generated model via a
+    ``model_validator(mode='before')`` that runs before constraint checks.
+
     Args:
         name: Class name for the generated model (used in error messages).
         field_map: Mapping of field name -> type string or field spec dict.
+        vocabularies: Optional dict of label → Vocabulary for resolving string refs.
 
     Returns:
         A new type that is a subclass of pydantic.BaseModel.
@@ -263,6 +336,7 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
     annotations: dict[str, Any] = {}
     namespace: dict[str, Any] = {"__annotations__": annotations}
     all_rules: dict[str, dict[str, Any]] = {}
+    all_vocab_fields: dict[str, Any] = {}
 
     for field_name, field_spec in field_map.items():
         if not isinstance(field_name, str):
@@ -286,7 +360,9 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
 
         elif isinstance(field_spec, dict):
             # Rich format: field_name: {type: ..., description: ..., ...}
-            python_type, field_info, rules = _parse_rich_field(field_name, field_spec, name)
+            python_type, field_info, rules = _parse_rich_field(
+                field_name, field_spec, name, vocabularies=vocabularies
+            )
             annotations[field_name] = python_type
             namespace[field_name] = field_info
             if rules:
@@ -298,12 +374,52 @@ def yaml_dict_to_model(name: str, field_map: dict[str, Any]) -> type:
                 f"got {type(field_spec).__name__}."
             )
 
-    # Attach a combined model_validator for all field-level validation rules
-    validator = _make_validator(all_rules)
+    # Resolve string vocab refs against vocabularies dict
+    _resolve_vocab_refs(namespace, vocabularies or {})
+
+    # Collect vocab fields for the normaliser
+    for fname, field_info in list(namespace.items()):
+        if fname.startswith("_"):
+            continue
+        extra = getattr(field_info, "json_schema_extra", None) or {}
+        vocab = extra.get("_pyconveyor_vocab")
+        if vocab is not None:
+            all_vocab_fields[fname] = vocab
+
+    # Attach a combined model_validator for vocab normalisation + validation rules
+    validator = _make_validator(all_rules, all_vocab_fields)
     if validator is not None:
         namespace["_pyconveyor_validate"] = validator
 
     return type(name, (BaseModel,), namespace)
+
+
+def _resolve_vocab_refs(
+    namespace: dict[str, Any],
+    vocabularies: dict[str, Any],
+) -> None:
+    """Resolve ``_pyconveyor_vocab_ref`` string references against *vocabularies*.
+
+    Replaces the ``_pyconveyor_vocab_ref`` key in ``json_schema_extra`` with
+    the resolved ``_pyconveyor_vocab`` object.
+    """
+    from .errors import SchemaRefError
+
+    for fname, field_info in list(namespace.items()):
+        if fname.startswith("_"):
+            continue
+        extra = getattr(field_info, "json_schema_extra", None) or {}
+        ref = extra.get("_pyconveyor_vocab_ref")
+        if ref is None:
+            continue
+        if ref not in vocabularies:
+            avail = sorted(vocabularies.keys())
+            raise SchemaRefError(
+                f"Field '{fname}' references vocab '{ref}' which was not found "
+                f"in vocabularies/. Available: {avail or '(none)'}"
+            )
+        extra.pop("_pyconveyor_vocab_ref")
+        extra["_pyconveyor_vocab"] = vocabularies[ref]
 
 
 # ── Schema hint rendering ─────────────────────────────────────────────────────

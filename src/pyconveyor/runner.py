@@ -243,7 +243,6 @@ class PipelineRunner:
         self._path = Path(pipeline_path).resolve()
         self._dir = self._path.parent
         self._schema_overrides: dict[str, type] = schemas or {}
-        self._spec = self._load_and_validate(self._path)
         self._clients: dict[str, Any] = {}  # model_name → client (lazy init)
         self._caches: dict[str, ResponseCache | None] = {}
         self._hooks: dict[str, list[Callable[..., Any]]] = {
@@ -253,6 +252,7 @@ class PipelineRunner:
             "on_llm_call": [],
         }
         self._vocabularies: dict[str, Any] = self._load_vocabularies()
+        self._spec = self._load_and_validate(self._path)
 
     # ── Hooks ──────────────────────────────────────────────────────────────────
 
@@ -467,9 +467,6 @@ class PipelineRunner:
                     "env": dict(os.environ),
                 }
             )
-            if self._vocabularies:
-                resolved["vocab"] = self._vocabularies
-
             result, logs = execute_llm_step(
                 step=step,
                 resolved_inputs=resolved,
@@ -640,26 +637,38 @@ class PipelineRunner:
     # ── Vocabulary helpers ─────────────────────────────────────────────────────
 
     def _load_vocabularies(self) -> dict[str, Any]:
-        """Load vocabulary objects declared in ``vocabularies:`` block."""
+        """Eagerly load all vocabulary files from the ``vocabularies/`` directory.
+
+        Scans ``vocabularies/`` relative to the pipeline directory and loads every
+        ``.yaml`` / ``.yml`` file as a ``Vocabulary``, keyed by its ``label`` field.
+        Files whose label is already loaded are skipped (first one wins).
+        """
         from .vocab import Vocabulary
 
-        raw = self._spec.get("vocabularies", {})
-        if not raw:
+        vocab_dir = self._dir / "vocabularies"
+        if not vocab_dir.is_dir():
             return {}
 
         result: dict[str, Any] = {}
-        for label, value in raw.items():
-            if isinstance(value, Vocabulary):
-                result[label] = value
-            elif isinstance(value, str):
-                # File path — resolve relative to pipeline directory
-                vocab_path = self._dir / value
-                try:
-                    result[label] = Vocabulary.from_file(vocab_path)
-                except FileNotFoundError:
-                    logger.warning("Vocabulary file not found: %s", vocab_path)
-            elif isinstance(value, dict):
-                result[label] = Vocabulary.from_dict({**value, "label": label})
+        for entry in sorted(vocab_dir.iterdir()):
+            if not entry.is_file():
+                continue
+            if entry.suffix.lower() not in (".yaml", ".yml"):
+                continue
+            try:
+                vocab = Vocabulary.from_file(entry)
+            except Exception as exc:
+                logger.warning("Failed to load vocabulary file '%s': %s", entry.name, exc)
+                continue
+            label = vocab.label
+            if label in result:
+                logger.warning(
+                    "Duplicate vocabulary label '%s' (%s ignored)", label, entry.name
+                )
+                continue
+            result[label] = vocab
+
+        logger.debug("Loaded %d vocabulary files from %s", len(result), vocab_dir)
         return result
 
     def _apply_growth_policies(
@@ -1289,13 +1298,14 @@ class PipelineRunner:
                         step_name=step["name"],
                         file_str=file_str,
                         key_path=f"{key_base}.schema",
+                        vocabularies=self._vocabularies,
                     )
                 else:
                     from .schema_builder import yaml_dict_to_model
 
                     model_name = _inline_schema_name(step["name"])
                     try:
-                        schema_cls = yaml_dict_to_model(model_name, schema_ref)
+                        schema_cls = yaml_dict_to_model(model_name, schema_ref, vocabularies=self._vocabularies)
                     except Exception as e:
                         raise SchemaRefError(
                             str(e), file=file_str, key_path=f"{key_base}.schema"
@@ -1358,7 +1368,7 @@ class PipelineRunner:
                 from .schema_builder import yaml_dict_to_model
 
                 try:
-                    schema_cls = yaml_dict_to_model(_inline_schema_name(name), schema_ref)
+                    schema_cls = yaml_dict_to_model(_inline_schema_name(name), schema_ref, vocabularies=self._vocabularies)
                 except Exception as e:
                     raise SchemaRefError(
                         str(e), file=file_str, key_path=f"{key_base}.schema"
@@ -1454,6 +1464,7 @@ def _load_schema_from_ref(
     step_name: str,
     file_str: str,
     key_path: str,
+    vocabularies: dict[str, Any] | None = None,
 ) -> type:
     from .schema_builder import yaml_dict_to_model
 
@@ -1524,7 +1535,7 @@ def _load_schema_from_ref(
 
     model_name = _inline_schema_name(step_name)
     try:
-        return yaml_dict_to_model(model_name, schema_def)
+        return yaml_dict_to_model(model_name, schema_def, vocabularies=vocabularies)
     except Exception as exc:
         raise SchemaRefError(
             str(exc),

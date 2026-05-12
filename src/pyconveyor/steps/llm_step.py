@@ -180,9 +180,11 @@ def execute_llm_step(
     _vocabs = _resolve_step_vocabs(schema_cls, vocabularies or {})
     if _vocabs:
         from ..vocab import build_vocab_hints
-        template_ctx.setdefault("vocab_hints", build_vocab_hints(_vocabs))
+        template_ctx["vocab_hints"] = build_vocab_hints(_vocabs)
+        template_ctx.setdefault("vocab", _vocabs)
     else:
         template_ctx.setdefault("vocab_hints", "")
+        template_ctx.setdefault("vocab", {})
 
     # Inject schema_hint (opt-in: user must place {{ schema_hint }} in template)
     if schema_cls is not None and "schema_hint" not in template_ctx:
