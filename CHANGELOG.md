@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.0] — 2026-05-14
+
+### Added
+
+- **Recursive benchmark scoring** — dicts and lists in expected outputs are now scored recursively with per-field/per-element breakdown. Step scores are the mean of all non-ignored field scores.
+- **`$ignore` sentinel** — exclude any field, list element, or entire step from benchmark scoring. Excluded positions are removed from the denominator entirely, so they don't help or hurt your accuracy.
+- **`$ordered` directive** — force positional list matching when order matters. Wrap your expected list with `{"$ordered": [...]}` and each position is compared independently.
+- **Set-based overlap scoring** (default for scalar lists) — `["egg", "milk"]` scores 1.0 against `["milk", "egg"]`. Uses Counter semantics for correct duplicate handling.
+- **Greedy best-match pairing** (default for dict lists) — each expected dict pairs with the best-scoring unmatched actual dict, so order doesn't matter for lists of objects.
+- **Step-level `$ignore`** — set an entire expected step to `"$ignore"` to exclude it from overall case scores while making your intent explicit.
+- **25 new tests** covering ignore behaviours, list-matching strategies, and edge cases.
+
 ## [1.7.1] — 2026-05-13
 
 ### Fixed
@@ -283,6 +295,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ISSUE-003**: `pyconveyor validate` / `pyconveyor run` now insert the pipeline directory into `sys.path` so local schema modules are importable without installation.
 - **ISSUE-004**: `pyconveyor run --input` now accepts an inline JSON string starting with `{` or `[`, eliminating the spurious `FileNotFoundError` on inline JSON input.
 
+[1.8.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.7.1...v1.8.0
 [1.7.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.5.0...v1.7.0
 [1.6.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.4.0...v1.5.0
