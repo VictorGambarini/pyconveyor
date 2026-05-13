@@ -314,7 +314,7 @@ EOF
 pyconveyor benchmark benchmarks/ --pipeline pipeline.yaml --report report.html
 ```
 
-Compare two pipeline versions side by side, get per-field accuracy scores, and generate HTML reports with charts and Mermaid graphs. Supports YAML and JSON benchmark files, large inputs via `$file` references, and PDF export.
+Compare two pipeline versions side by side, get per-field accuracy scores, and generate HTML reports with charts and Mermaid graphs. Supports YAML and JSON benchmark files, large inputs via `$file` references, `$ignore` sentinel to exclude fields from scoring, `$ordered` for positional list matching, and PDF export.
 
 ---
 
