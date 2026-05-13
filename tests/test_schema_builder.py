@@ -589,6 +589,17 @@ class TestVocabInSchemas:
         m = model(fruit="banana")
         assert m.fruit == "banana_fruit"
 
+    def test_empty_string_not_normalized_by_vocab(self):
+        """Empty strings must not be fuzzy-matched to a random vocab term."""
+        model = yaml_dict_to_model("M", {
+            "fruit": {
+                "type": "str",
+                "vocab": {"known": ["banana_fruit", "apple_fruit"]},
+            },
+        })
+        m = model(fruit="")
+        assert m.fruit == ""
+
     def test_vocab_ref_resolved_from_vocabularies(self):
         from pyconveyor.vocab import Vocabulary
         vocab = Vocabulary(known={"PET", "PE"}, label="plastic")

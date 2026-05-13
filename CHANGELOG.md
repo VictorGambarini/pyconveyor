@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.7.1] — 2026-05-13
+
+### Fixed
+
+- Empty strings on vocab-constrained fields are no longer fuzzy-matched to a random known term. The vocab normaliser now skips empty strings, allowing `min_length` validation to reject them normally.
+
 ## [1.7.0] — 2026-05-13
 
 ### Added

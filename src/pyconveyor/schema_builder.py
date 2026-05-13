@@ -94,7 +94,7 @@ def _make_validator(
         # ── Vocab normalisation (runs first) ──────────────────────────────────
         for fname, vocab in _vocabs.items():
             v = data.get(fname)
-            if v is not None and isinstance(v, str):
+            if v is not None and isinstance(v, str) and v:
                 canonical, _ = vocab.match(v)
                 data[fname] = canonical
 
