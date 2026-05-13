@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.6.0] — 2026-05-13
+## [1.7.0] — 2026-05-13
 
 ### Added
 - **Vocabularies on schema fields** — vocabularies are now declared directly on schema fields
@@ -277,6 +277,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ISSUE-003**: `pyconveyor validate` / `pyconveyor run` now insert the pipeline directory into `sys.path` so local schema modules are importable without installation.
 - **ISSUE-004**: `pyconveyor run --input` now accepts an inline JSON string starting with `{` or `[`, eliminating the spurious `FileNotFoundError` on inline JSON input.
 
+[1.7.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.5.0...v1.7.0
 [1.6.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.3.1...v1.4.0
