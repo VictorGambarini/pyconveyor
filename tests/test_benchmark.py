@@ -118,8 +118,8 @@ class TestScoring:
         s = self._run(tmp_path, {"greet": {"message": "Bonjour Ada!", "language": "Wrong"}})
         ss = s.pipelines[0].cases[0].step_scores["greet"]
         by_field = {f.field: f.score for f in ss.field_scores}
-        assert by_field["message"] == 1.0
-        assert by_field["language"] == 0.0
+        assert by_field["greet.message"] == 1.0
+        assert by_field["greet.language"] == 0.0
 
     def test_missing_step_scores_0(self, tmp_path: Path):
         s = self._run(tmp_path, {"nonexistent_step": {"x": "y"}})
@@ -487,3 +487,424 @@ class TestGraphWithScores:
         label_with_score = _label(step, score=0.5)
         assert "accuracy" not in label_no_score
         assert "accuracy: 50%" in label_with_score
+
+
+# ── $ignore sentinel ────────────────────────────────────────────────────────
+
+
+class TestIgnoreSentinel:
+    """Tests for the ``$ignore`` sentinel and related scoring changes."""
+
+    def _run(self, tmp_path: Path, expected: dict) -> BenchmarkSummary:
+        case = tmp_path / "case_01"
+        case.mkdir()
+        import json
+
+        (case / "input.json").write_text(
+            json.dumps({"name": "Ada", "language": "French"})
+        )
+        (case / "expected.json").write_text(json.dumps(expected))
+        runner = BenchmarkRunner(tmp_path, pipelines=[PIPELINES / "hello.yaml"])
+        return runner.run()
+
+    # ── Field-level $ignore ─────────────────────────────────────────────────
+
+    def test_single_field_ignore_excluded_from_mean(self, tmp_path: Path):
+        """One $ignore field doesn't affect the step score denominator."""
+        s = self._run(
+            tmp_path,
+            {"greet": {"message": "Bonjour Ada!", "language": "$ignore"}},
+        )
+        ss = s.pipelines[0].cases[0].step_scores["greet"]
+        assert ss.status == "scored"
+        assert ss.score == 1.0  # only message scored, language excluded
+
+    def test_all_fields_ignore_step_ignored(self, tmp_path: Path):
+        """When every field is $ignore, the step is excluded from scoring."""
+        s = self._run(
+            tmp_path,
+            {"greet": {"message": "$ignore", "language": "$ignore"}},
+        )
+        ss = s.pipelines[0].cases[0].step_scores["greet"]
+        assert ss.status == "ignored"
+        # Overall score should not include this step
+        assert s.pipelines[0].cases[0].overall_score == 0.0
+
+    def test_mixed_scored_and_ignored_fields(self, tmp_path: Path):
+        """Scored and ignored fields mix correctly in the mean."""
+        s = self._run(
+            tmp_path,
+            {"greet": {"message": "Wrong", "language": "French", "notes": "$ignore"}},
+        )
+        ss = s.pipelines[0].cases[0].step_scores["greet"]
+        assert ss.status == "scored"
+        # message=0.0, language=1.0, notes=ignored → mean = (0+1)/2 = 0.5
+        assert ss.score == pytest.approx(0.5)
+        # Verify field statuses
+        statuses = {f.field: f.status for f in ss.field_scores}
+        assert statuses["greet.notes"] == "ignored"
+        assert statuses["greet.message"] == "scored"
+
+    # ── Step-level $ignore ──────────────────────────────────────────────────
+
+    def test_step_level_ignore(self, tmp_path: Path):
+        """``"stepname": "$ignore"`` excludes the whole step."""
+        s = self._run(tmp_path, {"greet": "$ignore"})
+        ss = s.pipelines[0].cases[0].step_scores["greet"]
+        assert ss.status == "ignored"
+        assert s.pipelines[0].cases[0].overall_score == 0.0
+
+    def test_step_ignored_plus_scored_step(self, tmp_path: Path):
+        """An ignored step alongside a scored step."""
+        case = tmp_path / "c"
+        case.mkdir()
+        import json
+
+        (case / "input.json").write_text(
+            json.dumps({"name": "Ada", "language": "French"})
+        )
+        (case / "expected.json").write_text(
+            json.dumps({
+                "greet": "$ignore",
+                "greet_scored": {"message": "Bonjour Ada!", "language": "French"},
+            })
+        )
+        # Need a pipeline with both steps — create one
+        pipeline = tmp_path / "p.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  m:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            "    mock_responses:\n"
+            '      - \'{"message": "Bonjour Ada!", "language": "French"}\'\n'
+            "steps:\n"
+            "  - name: greet\n"
+            "    type: llm\n"
+            "    model: m\n"
+            "    prompt_string: hi\n"
+            "  - name: greet_scored\n"
+            "    type: llm\n"
+            "    model: m\n"
+            "    prompt_string: hi\n"
+        )
+        runner = BenchmarkRunner(tmp_path, pipelines=[pipeline])
+        s = runner.run()
+        case_result = s.pipelines[0].cases[0]
+        assert case_result.step_scores["greet"].status == "ignored"
+        assert case_result.step_scores["greet_scored"].status == "scored"
+        # Only greet_scored counts → overall = 1.0
+        assert case_result.overall_score == 1.0
+
+    # ── Nested dict $ignore ────────────────────────────────────────────────
+
+    def test_nested_dict_ignore(self, tmp_path: Path):
+        """$ignore works inside nested dicts with recursive scoring."""
+        expected = {
+            "greet": {
+                "meta": {
+                    "source": "mock",
+                    "notes": "$ignore",
+                },
+                "message": "Bonjour Ada!",
+            }
+        }
+        s = self._run(tmp_path, expected)
+        ss = s.pipelines[0].cases[0].step_scores["greet"]
+        assert ss.status == "scored"
+        # Fields: meta.source, meta.notes (ignored), message
+        # meta.source → "mock" in actual? Need to check actual output
+        field_statuses = {f.field: f.status for f in ss.field_scores}
+        assert field_statuses["greet.meta.notes"] == "ignored"
+
+    # ── Empty containers ────────────────────────────────────────────────────
+
+    def test_empty_dict_ignored(self, tmp_path: Path):
+        """An empty dict ``{}`` as expected gives status ignored."""
+        s = self._run(tmp_path, {"greet": {}})
+        ss = s.pipelines[0].cases[0].step_scores["greet"]
+        assert ss.status == "ignored"
+
+    # ── Top-level $ignore error ─────────────────────────────────────────────
+
+    def test_top_level_ignore_raises(self, tmp_path: Path):
+        """Bare '$ignore' as expected file content raises ValueError."""
+        case = tmp_path / "c"
+        case.mkdir()
+        import json
+
+        (case / "input.json").write_text(json.dumps({"name": "Ada"}))
+        (case / "expected.json").write_text(json.dumps("$ignore"))
+        with pytest.raises(ValueError, match="bare"):
+            BenchmarkRunner(tmp_path, pipelines=[PIPELINES / "hello.yaml"])
+
+    # ── Custom comparator interaction ───────────────────────────────────────
+
+    def test_custom_comparator_skipped_for_ignore(self, tmp_path: Path):
+        """Custom comparator is NOT called when expected value is $ignore."""
+        case = tmp_path / "c"
+        case.mkdir()
+        import json
+
+        (case / "input.json").write_text(
+            json.dumps({"name": "Ada", "language": "French"})
+        )
+        (case / "expected.json").write_text(
+            json.dumps({"greet": {"message": "$ignore", "language": "French"}})
+        )
+        called = []
+
+        def tracker(a, e):
+            called.append(1)
+            return 1.0
+
+        runner = BenchmarkRunner(
+            tmp_path,
+            pipelines=[PIPELINES / "hello.yaml"],
+            comparators={"greet.message": tracker},
+        )
+        s = runner.run()
+        assert len(called) == 0  # comparator not invoked for $ignore field
+        ss = s.pipelines[0].cases[0].step_scores["greet"]
+        assert ss.score == 1.0  # only language scored (matches), message ignored
+
+    # ── Aggregation excludes ignored steps ──────────────────────────────────
+
+    def test_ignored_step_not_in_aggregation(self, tmp_path: Path):
+        """Ignored steps are excluded from step_mean_accuracy."""
+        case = tmp_path / "c"
+        case.mkdir()
+        import json
+
+        (case / "input.json").write_text(
+            json.dumps({"name": "Ada", "language": "French"})
+        )
+        (case / "expected.json").write_text(json.dumps({"greet": "$ignore"}))
+        runner = BenchmarkRunner(tmp_path, pipelines=[PIPELINES / "hello.yaml"])
+        s = runner.run()
+        pr = s.pipelines[0]
+        assert "greet" not in pr.step_mean_accuracy
+
+
+# ── List matching ───────────────────────────────────────────────────────────
+
+
+class TestListMatching:
+    """Tests for set-overlap, $ordered positional, and best-match list scoring."""
+
+    def _make_pipeline(self, tmp_path: Path, mock_response: str) -> Path:
+        """Create a pipeline that returns a specific JSON value."""
+        pipeline = tmp_path / "p.yaml"
+        pipeline.write_text(
+            "models:\n"
+            "  m:\n"
+            "    provider: mock\n"
+            "    model: m\n"
+            f"    mock_responses: ['{mock_response}']\n"
+            "steps:\n"
+            "  - name: extract\n"
+            "    type: llm\n"
+            "    model: m\n"
+            "    prompt_string: hi\n"
+        )
+        return pipeline
+
+    def _run_case(self, tmp_path: Path, expected: dict) -> BenchmarkSummary:
+        case = tmp_path / "c"
+        case.mkdir()
+        import json
+
+        (case / "input.json").write_text("{}")
+        (case / "expected.json").write_text(json.dumps(expected))
+        return BenchmarkRunner(tmp_path, pipelines=[self._pipeline]).run()
+
+    # ── Set-based overlap (default for scalar lists) ────────────────────────
+
+    def test_set_overlap_order_independent(self, tmp_path: Path):
+        """Order doesn't matter for scalar lists."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": ["milk", "egg", "butter"]}'
+        )
+        s = self._run_case(tmp_path, {"extract": {"items": ["egg", "milk"]}})
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.status == "scored"
+        assert ss.score == 1.0  # "egg" and "milk" both present
+
+    def test_set_overlap_partial(self, tmp_path: Path):
+        """Missing elements reduce the score."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": ["egg"]}'
+        )
+        s = self._run_case(tmp_path, {"extract": {"items": ["egg", "milk"]}})
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 0.5  # 1 of 2 expected matched
+
+    def test_set_overlap_duplicates(self, tmp_path: Path):
+        """Duplicate handling via Counter."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": ["egg", "egg", "milk"]}'
+        )
+        s = self._run_case(tmp_path, {"extract": {"items": ["egg", "egg"]}})
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 1.0  # both expected "egg"s matched
+
+    # ── $ignore in scalar lists ─────────────────────────────────────────────
+
+    def test_scalar_list_ignore_consumes_extra(self, tmp_path: Path):
+        """$ignore consumes one unmatched actual element."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": ["milk", "egg", "butter"]}'
+        )
+        s = self._run_case(
+            tmp_path, {"extract": {"items": ["egg", "$ignore", "milk"]}}
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 1.0  # 2 real matches + 1 ignored wildcard satisfied
+
+    def test_scalar_list_ignore_unsatisfied(self, tmp_path: Path):
+        """$ignore without a spare actual reduces the score."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": ["egg", "milk"]}'
+        )
+        s = self._run_case(
+            tmp_path, {"extract": {"items": ["egg", "$ignore", "milk"]}}
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == pytest.approx(2 / 3)  # 2 real matches, 0 wildcard satisfied
+
+    # ── $ordered positional matching ────────────────────────────────────────
+
+    def test_ordered_positional_exact(self, tmp_path: Path):
+        """$ordered compares element-by-element by position."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": [1, 2, 3]}'
+        )
+        s = self._run_case(
+            tmp_path, {"extract": {"items": {"$ordered": [1, 2, 3]}}}
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 1.0
+
+    def test_ordered_positional_mismatch(self, tmp_path: Path):
+        """Order matters with $ordered — reversed list scores only overlapping positions."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": [3, 2, 1]}'
+        )
+        s = self._run_case(
+            tmp_path, {"extract": {"items": {"$ordered": [1, 2, 3]}}}
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        # pos 0: 1≠3=0, pos 1: 2=2=1, pos 2: 3≠1=0 → 1/3
+        assert ss.score == pytest.approx(1 / 3)
+
+    def test_ordered_with_ignore_wildcard(self, tmp_path: Path):
+        """$ignore in $ordered list matches anything at that position."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": ["a", "any", "c"]}'
+        )
+        s = self._run_case(
+            tmp_path,
+            {"extract": {"items": {"$ordered": ["a", "$ignore", "c"]}}},
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 1.0
+
+    def test_ordered_length_mismatch(self, tmp_path: Path):
+        """Different lengths penalize via max_len denominator."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '{"items": [1, 2]}'
+        )
+        s = self._run_case(
+            tmp_path, {"extract": {"items": {"$ordered": [1, 2, 3]}}}
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 2 / 3  # positions 0,1 match, position 2 missing
+
+    # ── Best-match dict lists ───────────────────────────────────────────────
+
+    def test_best_match_order_independent(self, tmp_path: Path):
+        """Dict lists match greedily regardless of order."""
+        self._pipeline = self._make_pipeline(
+            tmp_path,
+            '{"people": [{"name": "Bob"}, {"name": "Ada"}]}',
+        )
+        s = self._run_case(
+            tmp_path,
+            {"extract": {"people": [{"name": "Ada"}, {"name": "Bob"}]}},
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 1.0  # best-match pairs them correctly
+
+    def test_best_match_partial_fields(self, tmp_path: Path):
+        """Partial field matches in dict lists produce fractional scores."""
+        self._pipeline = self._make_pipeline(
+            tmp_path,
+            '{"people": [{"name": "Ada", "age": 30}]}',
+        )
+        s = self._run_case(
+            tmp_path,
+            {"extract": {"people": [{"name": "Ada", "age": 25}]}},
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 0.5  # name matches, age doesn't
+
+    def test_best_match_ignore_in_dict_field(self, tmp_path: Path):
+        """$ignore as a field value inside a dict list element."""
+        self._pipeline = self._make_pipeline(
+            tmp_path,
+            '{"people": [{"name": "Ada", "notes": "blah"}]}',
+        )
+        s = self._run_case(
+            tmp_path,
+            {
+                "extract": {
+                    "people": [{"name": "Ada", "notes": "$ignore"}]
+                }
+            },
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 1.0  # name matches, notes ignored
+
+    def test_best_match_ignore_as_list_element(self, tmp_path: Path):
+        """$ignore as a list element in dict list consumes best remaining."""
+        self._pipeline = self._make_pipeline(
+            tmp_path,
+            '{"people": [{"name": "Ada"}, {"name": "Bob"}, {"name": "Carl"}]}',
+        )
+        s = self._run_case(
+            tmp_path,
+            {
+                "extract": {
+                    "people": [{"name": "Ada"}, "$ignore", {"name": "Bob"}]
+                }
+            },
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        # Ada and Bob matched, $ignore consumes Carl → 3/3 = 1.0
+        assert ss.score == 1.0
+
+    def test_best_match_ignore_unsatisfied(self, tmp_path: Path):
+        """$ignore list element without a spare actual penalizes."""
+        self._pipeline = self._make_pipeline(
+            tmp_path,
+            '{"people": [{"name": "Ada"}]}',
+        )
+        s = self._run_case(
+            tmp_path,
+            {
+                "extract": {
+                    "people": [{"name": "Ada"}, "$ignore"]
+                }
+            },
+        )
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 0.5  # Ada matched, $ignore unfilled → 1/2
+
+    def test_actual_not_a_list(self, tmp_path: Path):
+        """When expected is a list but actual is not, score 0.0."""
+        self._pipeline = self._make_pipeline(
+            tmp_path, '"not a list"'
+        )
+        s = self._run_case(tmp_path, {"extract": ["a", "b"]})
+        ss = s.pipelines[0].cases[0].step_scores["extract"]
+        assert ss.score == 0.0

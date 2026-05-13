@@ -288,14 +288,20 @@ def _case_table(pr: PipelineBenchmarkResult) -> str:
                 row += "<td class='text-muted'>—</td>"
             elif ss.status == "missing":
                 row += "<td><span class='text-warning'>missing</span></td>"
+            elif ss.status == "ignored":
+                row += "<td><span class='text-muted'>ignored</span></td>"
             else:
                 cell = _score_badge(ss.score)
                 if ss.field_scores and len(ss.field_scores) > 1:
                     detail_rows = "".join(
-                        f"<tr><td>{_esc(f.field)}</td>"
-                        f"<td>{_repr(f.actual)}</td>"
-                        f"<td>{_repr(f.expected)}</td>"
-                        f"<td>{_score_badge(f.score)}</td></tr>"
+                        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                            _esc(f.field),
+                            _repr(f.actual),
+                            _repr(f.expected),
+                            '<span class="text-muted">ignored</span>'
+                            if f.status == "ignored"
+                            else _score_badge(f.score),
+                        )
                         for f in ss.field_scores
                     )
                     detail = (

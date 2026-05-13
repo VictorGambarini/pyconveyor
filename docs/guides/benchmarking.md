@@ -108,13 +108,15 @@ If a case has multiple formats for the same role (for example both `input.json` 
     "<field>": <value>,
     "<field>": <value>
   },
-  "<another_step>": "scalar value"
+  "<another_step>": "scalar value",
+  "<optional_step>": "$ignore"
 }
 ```
 
-- **Pydantic model steps** — provide a dict of fields. Each field is scored independently and the step score is the mean of all field scores.
-- **Transform / io steps** — provide the exact scalar or dict value the step should return.
+- **Pydantic model steps** — provide a dict of fields. Each field is scored independently and the step score is the mean of all field scores. Nested dicts are recursively scored field-by-field.
+- **Transform / io steps** — provide the exact scalar, dict, or list value the step should return.
 - **Omitting a step** — steps not listed in `expected.*` are not scored (they don't affect accuracy).
+- **`$ignore` sentinel** — mark any field, list element, or entire step as excluded from scoring (see [Ignoring fields](#ignoring-fields)).
 
 ### Example: classification step
 
@@ -133,23 +135,27 @@ If a case has multiple formats for the same role (for example both `input.json` 
 
 ## Scoring
 
+All containers (dicts, lists) are scored recursively. Dict fields produce per-field scores; list elements are matched element-by-element.
+
 ### How a field is scored
 
 By default, each field uses **exact equality**: score is `1.0` if actual == expected, `0.0` otherwise.
 
 ### How a step is scored
 
-For Pydantic model outputs, the step score is the **mean of all field scores**:
+For dict outputs, the step score is the **mean of all non-ignored field scores**:
 
 ```
 step_score = mean([field_1_score, field_2_score, ..., field_n_score])
 ```
 
-For scalar (non-dict) outputs, the step is scored directly as 1.0 or 0.0.
+For scalar (non-dict, non-list) outputs, the step is scored directly as 1.0 or 0.0.
+
+Steps where every field is `$ignore` (or the step itself is `"$ignore"`) get status `"ignored"` and are excluded from the overall case score.
 
 ### How a pipeline run is scored
 
-The overall score for a case is the **mean across all scored steps**.
+The overall score for a case is the **mean across all scored steps** (ignored and missing steps excluded).
 
 ### Pass rate
 
@@ -160,6 +166,119 @@ pyconveyor benchmark benchmarks/ --pipeline pipeline.yaml --pass-threshold 0.8
 ```
 
 The report shows both mean accuracy and pass rate. Mean accuracy tells you how good you are on average; pass rate tells you how often you're good enough.
+
+---
+## Ignoring fields
+
+Use the `$ignore` sentinel to exclude fields, list elements, or entire steps from scoring. Excluded positions are **removed from the denominator** — they don't inflate or deflate your scores.
+
+### Ignoring individual fields
+
+```json
+{
+  "extract": {
+    "title": "Gene Therapy Advances",
+    "notes": "$ignore"
+  }
+}
+```
+
+The `notes` field is not scored. The step score is based on `title` alone.
+
+### Ignoring an entire step
+
+```json
+{
+  "extract": {
+    "title": "Gene Therapy Advances"
+  },
+  "summary": "$ignore"
+}
+```
+
+The `summary` step is excluded from the overall case score entirely. Same effect as omitting it from `expected.json`, but makes your intent explicit.
+
+### Ignoring nested fields
+
+Comparison recurses into nested dicts, so `$ignore` works at any depth:
+
+```json
+{
+  "extract": {
+    "metadata": {
+      "source": "PubMed",
+      "internal_id": "$ignore"
+    },
+    "title": "Gene Therapy Advances"
+  }
+}
+```
+
+### Ignoring list elements
+
+`$ignore` works inside lists as a wildcard element — it consumes one actual element without scoring it:
+
+```json
+{
+  "extract": {
+    "authors": ["Ada Lovelace", "$ignore", "Grace Hopper"]
+  }
+}
+```
+
+The `$ignore` says "I expect a third author but I don't care who." If the actual output has exactly three authors, the extra one is consumed by the wildcard and the score stays high. If the actual output has only two, the wildcard is unsatisfied and the denominator includes it.
+
+### Ignored status in reports
+
+Ignored steps and fields appear with a neutral "ignored" label in the HTML report's per-case breakdown, so you can always see what was excluded.
+
+---
+## List matching
+
+By default, scalar lists use **set-based overlap** (order doesn't matter). Dict lists use **greedy best-match pairing** (order doesn't matter). For positional matching, use the `$ordered` directive.
+
+### Set-based overlap (default for scalar lists)
+
+```json
+{
+  "extract": {
+    "keywords": ["CRISPR", "gene therapy"]
+  }
+}
+```
+
+If the actual output is `["gene therapy", "CRISPR", "ethics"]`, the two expected keywords are found in the actual set → score `1.0`. Duplicates are handled with `Counter` semantics — expecting `["a", "a"]` and getting `["a", "b"]` scores `0.5`.
+
+### $ordered — positional matching
+
+When order matters, wrap the expected list with `{"$ordered": [...]}`:
+
+```json
+{
+  "extract": {
+    "steps": {"$ordered": ["isolate DNA", "apply CRISPR", "sequence"]}
+  }
+}
+```
+
+Each position is compared independently. If the actual output is `["apply CRISPR", "isolate DNA", "sequence"]`, the score is `0.33` (only position 2 matches). With default set-overlap the same pair would score `1.0`.
+
+### Best-match dict lists (default for dict lists)
+
+When matching a list of objects (e.g. extracted authors), each expected dict is greedily paired with the best-scoring unmatched actual dict:
+
+```json
+{
+  "extract": {
+    "authors": [
+      {"name": "Ada Lovelace", "affiliation": "Cambridge"},
+      {"name": "Grace Hopper", "affiliation": "Harvard"}
+    ]
+  }
+}
+```
+
+If the actual output lists the authors in a different order, scoring is still `1.0` because each expected dict finds its best match in the actual list. Partial field matches within each dict produce fractional scores.
 
 ---
 
