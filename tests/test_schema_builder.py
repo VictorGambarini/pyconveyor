@@ -516,3 +516,189 @@ class TestSchemaHintDescriptions:
         })
         hint = model_to_schema_hint(model)
         assert "array of objects" in hint
+
+
+# ── Vocab in YAML schemas ─────────────────────────────────────────────────────
+
+
+class TestVocabInSchemas:
+    def test_inline_vocab_stored_in_json_schema_extra(self):
+        model = yaml_dict_to_model("M", {
+            "plastic": {
+                "type": "str",
+                "vocab": {"known": ["PET", "PE"], "label": "plastic_type"},
+            },
+        })
+        extra = model.model_fields["plastic"].json_schema_extra or {}
+        vocab = extra.get("_pyconveyor_vocab")
+        from pyconveyor.vocab import Vocabulary
+        assert isinstance(vocab, Vocabulary)
+        assert vocab.known == {"PET", "PE"}
+        assert vocab.label == "plastic_type"
+
+    def test_inline_vocab_label_defaults_to_field_name(self):
+        model = yaml_dict_to_model("M", {
+            "color": {
+                "type": "str",
+                "vocab": {"known": ["red", "green"]},
+            },
+        })
+        extra = model.model_fields["color"].json_schema_extra or {}
+        vocab = extra.get("_pyconveyor_vocab")
+        assert vocab.label == "color"
+
+    def test_inline_vocab_normalizes_value(self):
+        model = yaml_dict_to_model("M", {
+            "plastic": {
+                "type": "str",
+                "vocab": {"known": ["PET", "PE"]},
+            },
+        })
+        # "pet" should be normalised to "PET" by the model validator
+        m = model(plastic="pet")
+        assert m.plastic == "PET"
+
+    def test_inline_vocab_exact_match_passes_through(self):
+        model = yaml_dict_to_model("M", {
+            "plastic": {
+                "type": "str",
+                "vocab": {"known": ["PET", "PE"]},
+            },
+        })
+        m = model(plastic="PE")
+        assert m.plastic == "PE"
+
+    def test_inline_vocab_novel_value_passes_through_unchanged(self):
+        model = yaml_dict_to_model("M", {
+            "plastic": {
+                "type": "str",
+                "vocab": {"known": ["PET"]},
+            },
+        })
+        m = model(plastic="HDPE")
+        assert m.plastic == "HDPE"
+
+    def test_inline_vocab_fuzzy_match_normalizes(self):
+        model = yaml_dict_to_model("M", {
+            "fruit": {
+                "type": "str",
+                "vocab": {"known": ["banana_fruit"]},
+            },
+        })
+        # "banana" should fuzzy-match to "banana_fruit"
+        m = model(fruit="banana")
+        assert m.fruit == "banana_fruit"
+
+    def test_vocab_ref_resolved_from_vocabularies(self):
+        from pyconveyor.vocab import Vocabulary
+        vocab = Vocabulary(known={"PET", "PE"}, label="plastic")
+        model = yaml_dict_to_model("M", {
+            "plastic": {"type": "str", "vocab": "plastic"},
+        }, vocabularies={"plastic": vocab})
+        extra = model.model_fields["plastic"].json_schema_extra or {}
+        resolved = extra.get("_pyconveyor_vocab")
+        assert resolved is vocab
+
+    def test_vocab_ref_missing_raises(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError, match="not found"):
+            yaml_dict_to_model("M", {
+                "plastic": {"type": "str", "vocab": "nonexistent"},
+            }, vocabularies={})
+
+    def test_vocab_and_validators_work_together(self):
+        """Vocab normalisation runs before constraint checks."""
+        model = yaml_dict_to_model("M", {
+            "code": {
+                "type": "str",
+                "vocab": {"known": ["ABC", "XYZ"]},
+                "pattern": r"^[A-Z]{3}$",
+            },
+        })
+        # "abc" normalises to "ABC" (via vocab), then matches pattern
+        m = model(code="abc")
+        assert m.code == "ABC"
+
+    def test_inline_vocab_growth_policy_must_be_auto(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError, match="growth_policy"):
+            yaml_dict_to_model("M", {
+                "plastic": {
+                    "type": "str",
+                    "vocab": {"known": ["PET"], "growth_policy": "human"},
+                },
+            })
+
+    def test_inline_vocab_no_persist(self):
+        from pyconveyor.errors import SchemaRefError
+        with pytest.raises(SchemaRefError, match="persist"):
+            yaml_dict_to_model("M", {
+                "plastic": {
+                    "type": "str",
+                    "vocab": {"known": ["PET"], "persist": True},
+                },
+            })
+
+    def test_vocab_with_description_stored(self):
+        model = yaml_dict_to_model("M", {
+            "plastic": {
+                "type": "str",
+                "vocab": {
+                    "known": ["PET", "PE"],
+                    "description": "ISO 1043 resin codes",
+                },
+            },
+        })
+        extra = model.model_fields["plastic"].json_schema_extra or {}
+        vocab = extra.get("_pyconveyor_vocab")
+        assert vocab.description == "ISO 1043 resin codes"
+
+    def test_mixed_vocab_and_non_vocab_fields(self):
+        model = yaml_dict_to_model("M", {
+            "name": "str",
+            "plastic": {
+                "type": "str",
+                "vocab": {"known": ["PET"]},
+            },
+            "quantity": "int",
+        })
+        m = model(name="test", plastic="pet", quantity=5)
+        assert m.name == "test"
+        assert m.plastic == "PET"
+        assert m.quantity == 5
+
+    def test_nested_schema_with_vocab_in_item(self):
+        model = yaml_dict_to_model("M", {
+            "entries": {
+                "type": "list",
+                "items": {
+                    "code": {
+                        "type": "str",
+                        "vocab": {"known": ["ABC", "XYZ"]},
+                    },
+                },
+            },
+        })
+        m = model(entries=[{"code": "abc"}])
+        assert m.entries[0].code == "ABC"
+
+    def test_vocab_with_capture_ideal_stored(self):
+        model = yaml_dict_to_model("M", {
+            "plastic": {
+                "type": "str",
+                "vocab": {"known": ["PET"], "capture_ideal": True},
+            },
+        })
+        extra = model.model_fields["plastic"].json_schema_extra or {}
+        vocab = extra.get("_pyconveyor_vocab")
+        assert vocab.capture_ideal is True
+
+    def test_vocab_ref_removed_after_resolution(self):
+        from pyconveyor.vocab import Vocabulary
+        vocab = Vocabulary(known={"PET"}, label="plastic")
+        model = yaml_dict_to_model("M", {
+            "plastic": {"type": "str", "vocab": "plastic"},
+        }, vocabularies={"plastic": vocab})
+        extra = model.model_fields["plastic"].json_schema_extra or {}
+        assert "_pyconveyor_vocab_ref" not in extra
+        assert "_pyconveyor_vocab" in extra

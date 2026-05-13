@@ -57,7 +57,7 @@ pyconveyor init my_pipeline/ --interactive
 
 Prompts you for:
 
-1. What you're extracting from (e.g. "invoices", "articles")
+1. What you're extracting from (e.g. "papers", "articles")
 2. Output fields — one per line in `name:type` format
 3. Which LLM provider (OpenAI, Anthropic, or Ollama)
 
@@ -77,7 +77,7 @@ export OPENAI_API_KEY=sk-...
 pyconveyor run pipeline.yaml --input '{"document": "Hello world"}'
 
 # Interactive
-pyconveyor init invoice_extractor/ --interactive
+pyconveyor init paper_extractor/ --interactive
 ```
 
 ---
@@ -331,10 +331,10 @@ from pydantic import BaseModel
 from typing import Optional
 
 class Extract(BaseModel):
-    invoice_number: str
-    vendor: str
-    amount: float
-    due_date: Optional[str] = None
+    title: str
+    authors: list[str]
+    doi: Optional[str] = None
+    publication_year: int
 ```
 
 **Notes:**
@@ -509,7 +509,7 @@ pyconveyor vocab review <pipeline> [--auto-accept]
 |---|---|
 | `--auto-accept` | Accept all pending suggestions without prompting (useful in CI) |
 
-The command reads the `vocabularies:` block from the pipeline YAML, locates the vocabulary files, and presents each pending suggestion with:
+The command scans the `vocabularies/` directory for vocabulary files and presents each pending suggestion with:
 
 - The raw value the LLM proposed
 - How many times it has been seen
@@ -519,18 +519,18 @@ The command reads the `vocabularies:` block from the pipeline YAML, locates the 
 **Interactive prompt:**
 
 ```
-Vocabulary: labels
-Description: Document classification labels for invoice processing
-Known terms: invoice, receipt, statement
+Vocabulary: method
+Description: Primary experimental methods in molecular biology.
+Known terms: PCR, Western blot, ELISA, Mass spectrometry, RNA-seq
 Pending suggestions (2):
-  1. 'purchase order' — novel (seen 3×)
-  2. 'remittance' — novel (seen 1×)
+  1. 'CRISPR-Cas9' — novel (seen 3×)
+  2. 'immunoblotting' — fuzzy match for 'Western blot' (seen 1×)
 
 Enter numbers to accept (comma-separated), 'd<numbers>' to deny, or Enter to skip.
 > 1 d2
-  ✓ Added 'purchase order' to labels
-  ✗ Denied 'remittance' in labels
-  Saved vocabularies/labels.yaml
+  ✓ Added 'CRISPR-Cas9' to method
+  ✗ Denied 'immunoblotting' in method
+  Saved vocabularies/method.yaml
 ```
 
 See the [Vocabulary Fields guide](../guides/vocab.md) for how to configure vocabularies in your pipeline.

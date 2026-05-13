@@ -21,23 +21,10 @@ cd my_pipeline/
 export OPENAI_API_KEY=sk-...
 
 # 3. Run
-pyconveyor run pipeline.yaml --input '{"document": "Invoice from Acme Corp…"}'
+pyconveyor run pipeline.yaml --input '{"paper": "Smith et al. demonstrate that..."}'
 ```
 
 Or go deeper with the **[Quickstart guide →](quickstart.md)**
-
----
-
-## Why pyconveyor?
-
-The real competition is not LangChain or LlamaIndex. It is:
-
-- **Ad-hoc Python scripts** that break when the model output format shifts
-- **Jupyter notebooks** that are not reproducible and cannot be scheduled
-- **Bash glue pipelines** with no schema guarantees
-- **Fragile prompt loops** rewritten from scratch for every new extraction task
-
-pyconveyor makes **reproducible extraction, reliable retries, schema-safe outputs, and observable runs** simpler than handwritten glue code.
 
 ---
 
@@ -49,19 +36,12 @@ pyconveyor makes **reproducible extraction, reliable retries, schema-safe output
 | **CLI-first** | `pyconveyor init`, `run`, `batch`, `benchmark` — no Python needed to get started |
 | **OpenAI-compat-first** | Works with Ollama, vLLM, LM Studio, and any hosted endpoint |
 | **Self-correcting retries** | Schema and parse errors are fed back to the model so it can fix itself |
+| **Vocabularies on fields** | Declare controlled vocabularies on schema fields; automatic fuzzy matching and suggestion capture |
 | **Benchmarking built in** | Compare pipeline versions against golden-standard cases; get per-step accuracy |
 | **HTML/PDF reports** | One command produces a shareable report with tables, graphs, and charts |
 | **Extraction-focused** | Optimised for classification, annotation, and structured record extraction |
 | **Explicit DAG** | Every step, dependency, and control flow branch is visible in one YAML file |
 | **Comprehensible in one sitting** | The entire runner is one file; the YAML format has a one-page reference |
-
----
-
-## What pyconveyor is not
-
-pyconveyor does not use the words `agent`, `autonomous`, `AI workflow platform`, `tool calling`, `memory`, or `RAG`. These describe a different audience and a different set of problems.
-
-pyconveyor is: `deterministic`, `reproducible`, `schema-driven`, `extraction pipelines`, `structured outputs`, `multi-model reconciliation`, `research workflows`.
 
 ---
 

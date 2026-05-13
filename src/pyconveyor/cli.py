@@ -619,49 +619,36 @@ def _cmd_visualise(args: Any) -> None:
 
 def _cmd_vocab_review(args: Any) -> None:
     """Interactive review of pending vocabulary suggestions."""
-    import yaml
-
     from .vocab import Vocabulary
 
     pipeline_path = Path(args.pipeline).resolve()
     pipeline_dir = pipeline_path.parent
 
-    try:
-        with pipeline_path.open(encoding="utf-8") as f:
-            spec = yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"Error reading pipeline: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    vocab_block = spec.get("vocabularies", {})
-    if not vocab_block:
-        print("No vocabularies declared in this pipeline.")
+    vocab_dir = pipeline_dir / "vocabularies"
+    if not vocab_dir.is_dir():
+        print("No vocabularies/ directory found for this pipeline.")
         return
 
-    # Load all vocab files
+    # Scan all vocab files in vocabularies/
     vocabs: dict[str, tuple[Vocabulary, Path]] = {}
-    for label, value in vocab_block.items():
-        if isinstance(value, str):
-            vocab_path = pipeline_dir / value
-            if not vocab_path.exists():
-                print(f"  Vocab file not found: {vocab_path} — skipping", file=sys.stderr)
-                continue
-            vocab = Vocabulary.from_file(vocab_path)
-            vocabs[label] = (vocab, vocab_path)
-        elif isinstance(value, dict):
-            persist = value.get("persist")
-            if persist and isinstance(persist, str):
-                vocab_path = pipeline_dir / persist
-            elif persist is True:
-                vocab_path = pipeline_dir / "vocabularies" / f"{label}.yaml"
-            else:
-                print(f"  Vocab '{label}' has no persist path — skipping")
-                continue
-            if not vocab_path.exists():
-                print(f"  No pending suggestions file for '{label}' — skipping")
-                continue
-            vocab = Vocabulary.from_file(vocab_path)
-            vocabs[label] = (vocab, vocab_path)
+    for entry in sorted(vocab_dir.iterdir()):
+        if not entry.is_file():
+            continue
+        if entry.suffix.lower() not in (".yaml", ".yml"):
+            continue
+        try:
+            vocab = Vocabulary.from_file(entry)
+        except Exception as e:
+            print(f"  Failed to load {entry.name}: {e} — skipping", file=sys.stderr)
+            continue
+        if vocab.label in vocabs:
+            print(
+                f"  Warning: duplicate label '{vocab.label}' — "
+                f"keeping first, ignoring {entry.name}",
+                file=sys.stderr,
+            )
+            continue
+        vocabs[vocab.label] = (vocab, entry)
 
     if not vocabs:
         print("No vocabulary files found to review.")
@@ -669,7 +656,8 @@ def _cmd_vocab_review(args: Any) -> None:
 
     any_pending = False
     for label, (vocab, vocab_path) in vocabs.items():
-        if not vocab.pending:
+        pending: list[dict[str, Any]] = vocab.pending
+        if not pending:
             continue
         any_pending = True
 
@@ -679,22 +667,23 @@ def _cmd_vocab_review(args: Any) -> None:
         print(f"Known terms: {', '.join(sorted(vocab.known))}")
         if vocab.denied:
             print(f"Denied terms: {', '.join(sorted(vocab.denied))}")
-        print(f"\nPending suggestions ({len(vocab.pending)}):")
-        for i, entry in enumerate(vocab.pending, 1):
-            raw = entry.get("raw_value", "?")
-            seen = entry.get("seen", 1)
-            match_type = entry.get("match_type", "novel")
-            ideal = entry.get("ideal_value")
+        print(f"\nPending suggestions ({len(pending)}):")
+        for i, pent in enumerate(pending, 1):
+            raw = pent.get("raw_value", "?")
+            seen = pent.get("seen", 1)
+            match_type = pent.get("match_type", "novel")
+            ideal = pent.get("ideal_value")
             ideal_str = f" (ideal: '{ideal}')" if ideal else ""
-            matched = entry.get("matched_to")
+            matched = pent.get("matched_to")
             matched_str = f" → fuzzy match for '{matched}'" if matched else ""
             print(f"  {i}. '{raw}'{ideal_str} — {match_type}{matched_str} (seen {seen}×)")
 
         if args.auto_accept:
-            for entry in vocab.pending:
-                vocab.add_term(entry["raw_value"])
-            print(f"\n→ Auto-accepted all {len(vocab.pending)} terms into '{label}'.")
-            vocab.pending.clear()
+            for pent in pending:
+                raw_value: str = str(pent.get("raw_value", ""))
+                vocab.add_term(raw_value)
+            print(f"\n→ Auto-accepted all {len(pending)} terms into '{label}'.")
+            pending.clear()
             vocab.save(vocab_path)
             continue
 
@@ -727,8 +716,8 @@ def _cmd_vocab_review(args: Any) -> None:
                     pass
 
         kept_pending: list[dict[str, Any]] = []
-        for i, entry in enumerate(vocab.pending):
-            raw = entry["raw_value"]
+        for i, pent in enumerate(pending):
+            raw = str(pent.get("raw_value", ""))
             if i in accept_indices:
                 vocab.add_term(raw)
                 print(f"  ✓ Added '{raw}' to {label}")
@@ -736,7 +725,7 @@ def _cmd_vocab_review(args: Any) -> None:
                 vocab.denied.add(raw)
                 print(f"  ✗ Denied '{raw}' in {label}")
             else:
-                kept_pending.append(entry)
+                kept_pending.append(pent)
 
         vocab.pending = kept_pending
         vocab.save(vocab_path)

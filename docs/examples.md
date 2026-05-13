@@ -11,27 +11,24 @@ The minimal pipeline: one LLM call, one schema, one result.
 **`schemas.py`**
 ```python
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
-class ArticleSummary(BaseModel):
+class PaperMetadata(BaseModel):
     title: str
     authors: List[str]
     key_findings: List[str]
     methodology: str
+    doi: Optional[str] = None
 ```
 
-**`prompts/summarise.j2`**
+**`prompts/extract.j2`**
 ```jinja2
-Summarise the following scientific article.
+Extract structured metadata from the following scientific paper.
 
-Article:
-{{ ctx.text }}
+Paper:
+{{ ctx.paper }}
 
-Return a JSON object with:
-- "title": the article title
-- "authors": list of author names
-- "key_findings": up to 5 key findings as short strings
-- "methodology": one sentence describing the methodology
+{{ schema_hint }}
 ```
 
 **`pipeline.yaml`**
@@ -45,11 +42,11 @@ models:
     timeout:  120
 
 steps:
-  - name: summarise
+  - name: extract
     type: llm
     model: default
-    prompt: prompts/summarise.j2
-    schema: schemas:ArticleSummary
+    prompt: prompts/extract.j2
+    schema: schemas:PaperMetadata
     max_attempts: 3
 ```
 
@@ -58,50 +55,161 @@ steps:
 from pyconveyor import PipelineRunner
 
 runner = PipelineRunner("pipeline.yaml")
-result = runner.run({"text": open("article.txt").read()})
+result = runner.run({"paper": open("paper.md").read()})
 
 if result.failed:
     print("Failed:", result.failure_state)
 else:
-    summary = result.steps["summarise"].value
-    print(summary.title)
-    print(summary.key_findings)
+    meta = result.steps["extract"].value
+    print(meta.title)
+    print(meta.key_findings)
 ```
 
 **CLI:**
 ```bash
-pyconveyor run pipeline.yaml --input '{"text": "..."}'
+pyconveyor run pipeline.yaml --input '{"paper": "..."}'
+```
+
+---
+
+## Multi-step extraction with classification
+
+Extract metadata, then classify the paper into a research field — all in one pipeline.
+
+**`pipeline.yaml`**
+```yaml
+models:
+  default:
+    provider: openai_compat
+    api_key:  ${OPENAI_API_KEY}
+    model:    gpt-4o-mini
+    timeout:  120
+
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt: prompts/extract.j2
+    schema:
+      title: str
+      abstract: str
+      methods: list[str]
+
+  - name: classify
+    type: llm
+    model: default
+    prompt: prompts/classify.j2
+    schema:
+      field: str
+      subfield: str | None
+      confidence: float
+```
+
+**`prompts/classify.j2`**
+```jinja2
+Classify this paper into a research field.
+
+Title: {{ steps.extract.title }}
+Abstract: {{ steps.extract.abstract }}
+
+Return:
+- "field": primary field (e.g. "materials science", "molecular biology")
+- "subfield": more specific if identifiable
+- "confidence": your confidence 0.0-1.0
+```
+
+---
+
+## Controlled vocabulary on fields
+
+Constrain extraction to known terms with automatic fuzzy matching.
+
+**`vocabularies/organism.yaml`**
+```yaml
+known:
+  - Escherichia coli
+  - Saccharomyces cerevisiae
+  - Bacillus subtilis
+  - Pseudomonas aeruginosa
+  - Staphylococcus aureus
+label: organism
+growth_policy: auto
+```
+
+**`vocabularies/method.yaml`**
+```yaml
+known:
+  - PCR
+  - Western blot
+  - ELISA
+  - Mass spectrometry
+  - RNA-seq
+  - CRISPR-Cas9
+  - Flow cytometry
+label: method
+growth_policy: human
+```
+
+**`pipeline.yaml`**
+```yaml
+models:
+  default:
+    provider: openai_compat
+    api_key:  ${OPENAI_API_KEY}
+    model:    gpt-4o-mini
+    timeout:  120
+
+steps:
+  - name: extract
+    type: llm
+    model: default
+    prompt: prompts/extract.j2
+    schema:
+      organism:
+        type: str
+        description: "Primary organism studied."
+        vocab: organism
+      method:
+        type: str
+        description: "Primary experimental method used."
+        vocab: method
+      finding: str
+    max_attempts: 3
+```
+
+The `organism` vocabulary uses `growth_policy: auto` — close matches (like "E. coli" → "Escherichia coli") are accepted immediately. The `method` vocabulary uses `growth_policy: human` — novel methods are queued for CLI review.
+
+```bash
+pyconveyor vocab review
 ```
 
 ---
 
 ## Dual-model reconciliation
 
-Two models extract independently; a merge step arbitrates disagreements. This is pyconveyor's primary/reviewer pattern.
+Two models extract independently; a merge step arbitrates disagreements.
 
 **`schemas.py`**
 ```python
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional
 
-class Extraction(BaseModel):
-    classification: str
+class Classification(BaseModel):
+    field: str
     confidence: float
     notes: Optional[str] = None
 ```
 
 **`steps.py`**
 ```python
-from schemas import Extraction
+from schemas import Classification
 from typing import Optional
 
-def reconcile(primary: Optional[Extraction], reviewer: Optional[Extraction]) -> Extraction:
+def reconcile(primary: Optional[Classification], reviewer: Optional[Classification]) -> Classification:
     if reviewer is None:
         return primary
-
-    if primary.classification == reviewer.classification:
+    if primary.field == reviewer.field:
         return primary
-
     # Disagree — take the higher-confidence result
     return primary if primary.confidence >= reviewer.confidence else reviewer
 ```
@@ -122,7 +230,7 @@ models:
     api_key:  ${REVIEWER_API_KEY}
     model:    gpt-4o-mini
     timeout:  120
-    required: false   # pipeline continues if reviewer is not configured
+    required: false
 
 steps:
   - name: extract
@@ -132,14 +240,14 @@ steps:
         type: llm
         model: primary
         prompt: prompts/classify.j2
-        schema: schemas:Extraction
+        schema: schemas:Classification
         max_attempts: 3
 
       - name: reviewer
         type: llm
         model: reviewer
         prompt: prompts/classify.j2
-        schema: schemas:Extraction
+        schema: schemas:Classification
         max_attempts: 2
         required: false
 
@@ -156,17 +264,17 @@ steps:
 from pyconveyor import PipelineRunner
 
 runner = PipelineRunner("pipeline.yaml")
-result = runner.run({"document": "..."})
+result = runner.run({"paper": "..."})
 
 final = result.steps["final"].value
-print(f"Classification: {final.classification} (confidence: {final.confidence})")
+print(f"Field: {final.field} (confidence: {final.confidence})")
 ```
 
 ---
 
 ## Ensemble extraction with auto-judge
 
-Run two models in parallel and let a third model merge their outputs into one result. No glue code needed.
+Run two models in parallel and let a third model merge their outputs. No glue code needed.
 
 **`schemas.py`**
 ```python
@@ -174,7 +282,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 class Extraction(BaseModel):
-    classification: str
+    field: str
     confidence: float
     notes: Optional[str] = None
 ```
@@ -204,10 +312,10 @@ steps:
         name: primary
       - model: claude
         name: reviewer
-        required: false      # pipeline continues if this model is unavailable
+        required: false
     judge:
       model: gpt4o
-      condition: all_succeeded   # only merge when both models returned results
+      condition: all_succeeded
 ```
 
 **`run.py`**
@@ -215,11 +323,11 @@ steps:
 from pyconveyor import PipelineRunner
 
 runner = PipelineRunner("pipeline.yaml")
-result = runner.run({"document": "..."})
+result = runner.run({"paper": "..."})
 
 # The merged result (judge output, or first-member fallback)
 final = result.steps["extract"].value
-print(f"Classification: {final.classification} (confidence: {final.confidence})")
+print(f"Field: {final.field} (confidence: {final.confidence})")
 
 # Individual member results are also available
 primary  = result.steps["extract.primary"].value
@@ -247,7 +355,7 @@ models:
 steps:
   - name: check_input
     type: validate
-    condition: "{{ ctx.document is not none }}"
+    condition: "{{ ctx.paper is not none }}"
 
   - name: extract
     type: llm
@@ -255,7 +363,7 @@ steps:
     prompt: prompts/extract.j2
     schema: schemas:ExtractionResult
     max_attempts: 3
-    on_error: continue         # don't abort pipeline on extraction failure
+    on_error: continue
     on_failure: steps:log_failure
 
   - name: save
@@ -263,7 +371,7 @@ steps:
     fn: steps:save_result
     inputs:
       result: "{{ steps.extract.value }}"
-      doc_id: "{{ ctx.doc_id }}"
+      paper_id: "{{ ctx.paper_id }}"
     condition: "{{ steps.extract.value is not none }}"
 ```
 
@@ -275,19 +383,18 @@ from schemas import ExtractionResult
 def log_failure(step_name, exception, rctx):
     print(f"Step {step_name} failed: {exception}")
 
-def save_result(result: Optional[ExtractionResult], doc_id: str):
+def save_result(result: Optional[ExtractionResult], paper_id: str):
     if result is None:
-        print(f"Skipping save for {doc_id}: extraction failed")
+        print(f"Skipping save for {paper_id}: extraction failed")
         return
-    # persist result...
-    print(f"Saved {doc_id}: {result.title}")
+    print(f"Saved {paper_id}: {result.title}")
 ```
 
 ---
 
 ## Conditional branching
 
-Route to a fast or thorough extraction based on document length.
+Route to a fast or thorough extraction based on paper length.
 
 **`pipeline.yaml`**
 ```yaml
@@ -307,7 +414,7 @@ models:
 steps:
   - name: route
     type: condition
-    if: "{{ len(ctx.document) < 5000 }}"
+    if: "{{ len(ctx.paper) < 5000 }}"
     then:
       - name: extract
         type: llm
@@ -349,16 +456,16 @@ from pyconveyor import PipelineRunner
 def test_extraction_pipeline():
     runner = PipelineRunner("pipeline.yaml")
     result = runner.run(
-        {"document": "Test document"},
+        {"paper": "Smith et al. demonstrate..."},
         model_overrides={
             "default": {
                 "provider": "mock",
-                "response": '{"title": "Test", "key_points": ["Point one"]}',
+                "response": '{"title": "Test Paper", "key_findings": ["Finding one"]}',
             }
         }
     )
     assert not result.failed
     extraction = result.steps["extract"].value
-    assert extraction.title == "Test"
-    assert len(extraction.key_points) == 1
+    assert extraction.title == "Test Paper"
+    assert len(extraction.key_findings) == 1
 ```
