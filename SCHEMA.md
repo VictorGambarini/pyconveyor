@@ -14,7 +14,6 @@ Every field, its type, whether it's required, its default value, and an example 
 | `schema` | map | no | — | Top-level YAML schema block (see [Schema block](#schema-block)) |
 | `schemas` | map | no | — | Named schema imports (alternative to inline `schema:`) |
 | `parsers` | map | no | — | Named parser imports |
-| `vocabularies` | map | no | — | Named [Vocabulary](#vocabulary) definitions |
 | `outputs` | map | no | — | Automatic output saving after a run (see [Outputs](#outputs)) |
 
 ---
@@ -58,7 +57,7 @@ schema:
 | `min_items` | integer | no | — | Minimum list length |
 | `max_items` | integer | no | — | Maximum list length |
 | `on_fail` | string | no | `error` | `error` — raise (triggers retry); `null` — coerce to None; `warn` — log and keep |
-| `vocab` | string | no | — | Key from `vocabularies:` block; hint only, not enforced |
+| `vocab` | string or map | no | — | Filename in `vocabularies/` directory (e.g. `organism` → `vocabularies/organism.yaml`) or inline dict `{terms: [...], growth_policy: auto}`. Inline vocabs are restricted to `growth_policy: auto` only. |
 
 ### Nested list of objects
 
@@ -512,23 +511,63 @@ steps:
 
 ## Vocabulary
 
-Defined under `vocabularies.<name>`:
+Vocabularies are YAML files in a `vocabularies/` directory alongside the pipeline file. They are loaded eagerly at startup and referenced by filename on schema fields.
+
+### Vocabulary file format
+
+A vocabulary file in `vocabularies/<name>.yaml`:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `known` | list[string] | yes | — | Canonical terms |
-| `label` | string | no | `"vocabulary"` | Human-readable label used in summaries |
+| `label` | string | no | filename stem | Human-readable label for summaries and prompt hints |
+| `description` | string | no | — | Description shown to the LLM to guide novel-term decisions |
+| `growth_policy` | string | no | `"human"` | `auto` (add immediately), `human` (queue for review), `llm` (LLM decides) |
 | `fuzzy_match` | boolean | no | `true` | Enable substring + edit-distance matching |
 | `case_sensitive` | boolean | no | `false` | Whether matching is case-sensitive |
+| `capture_ideal` | boolean | no | `false` | When true, LLM is prompted to provide a canonical form for novel values |
+| `persist` | boolean | no | `false` | Save vocabulary file after runs that produce suggestions |
 
-**Example:**
+**Example `vocabularies/organism.yaml`:**
 ```yaml
-vocabularies:
-  plastic_type:
-    known: [PET, PE, PLA, ABS, PS]
-    fuzzy_match: true
-    case_sensitive: false
+known:
+  - Escherichia coli
+  - Saccharomyces cerevisiae
+  - Bacillus subtilis
+  - Pseudomonas aeruginosa
+label: organism
+growth_policy: auto
+fuzzy_match: true
 ```
+
+### Referencing on a schema field
+
+Reference by filename (without the `.yaml` extension):
+
+```yaml
+schema:
+  organism:
+    type: str
+    description: "Primary organism studied."
+    vocab: organism     # loads vocabularies/organism.yaml
+```
+
+Or define a small vocabulary inline (restricted to `growth_policy: auto` only):
+
+```yaml
+schema:
+  study_type:
+    type: str
+    description: "Type of study."
+    vocab:
+      terms:
+        - in vitro
+        - in vivo
+        - in silico
+      description: "Controlled vocabulary for study type."
+```
+
+Inline vocabs cannot use `growth_policy: human`, `growth_policy: llm`, or `persist`. Use file-based vocabs for those features.
 
 ---
 
@@ -545,10 +584,6 @@ models:
       enabled: true
       ttl_days: 7
 
-vocabularies:
-  material:
-    known: [steel, aluminium, copper, plastic]
-
 outputs:
   dir: ./outputs
   final_as: result.json
@@ -558,7 +593,12 @@ steps:
     type: llm
     model: default
     prompt: extract.j2
-    schema: schemas:Metadata
+    schema:
+      title: str
+      material:
+        type: str
+        description: "Primary material studied."
+        vocab: material      # loads vocabularies/material.yaml
     max_attempts: 3
 
   - name: check

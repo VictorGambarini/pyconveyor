@@ -8,9 +8,6 @@ Complete reference for every field in a pyconveyor pipeline YAML file.
 models:       # required if any step uses type: llm
   <name>: ...
 
-vocabularies: # optional — named vocabulary definitions
-  <name>: ...
-
 schema:       # optional — top-level schema block (see below)
   <field>: ...
 
@@ -26,6 +23,8 @@ steps:        # required
     type: ...
 ```
 
+Vocabularies are stored as YAML files in a `vocabularies/` directory next to the pipeline file and referenced on schema fields with `vocab: <filename>`. See the [Vocabulary Fields guide](../guides/vocab.md).
+
 ---
 
 ## `schema:` block
@@ -36,9 +35,9 @@ An optional top-level block that defines the output schema for the pipeline. Fie
 
 ```yaml
 schema:
-  vendor: str
-  amount: float
-  due_date: str | None
+  title: str
+  authors: list[str]
+  doi: str | None
 ```
 
 Supported type strings: `str`, `int`, `float`, `bool`, any of the above followed by `| None`, and `list[str]` / `list[int]` / `list[float]` / `list[bool]` / `dict[str, str]` / `dict[str, int]`.
@@ -47,14 +46,14 @@ Supported type strings: `str`, `int`, `float`, `bool`, any of the above followed
 
 ```yaml
 schema:
-  vendor:
+  title:
     type: str
-    description: "Company name as written on the invoice."
+    description: "Paper title exactly as written."
     min_length: 1
-  accession:
+  doi:
     type: str | None
-    description: "Database accession ID."
-    pattern: "^[A-Za-z0-9][A-Za-z0-9_.]{2,39}$"
+    description: "DOI if present in the paper."
+    pattern: "^10\\.[0-9]{4,}/.+$"
     on_fail: null
 ```
 
@@ -70,7 +69,7 @@ schema:
 | `min_items` | no | Minimum list length |
 | `max_items` | no | Maximum list length |
 | `on_fail` | no | `error` (default — triggers retry), `null` (coerce to null), `warn` (log and keep) |
-| `vocab` | no | Key from the `vocabularies:` block — hint only, not enforced |
+| `vocab` | no | Filename in `vocabularies/` directory or inline dict `{terms: [...]}`. Normalisation runs automatically — fuzzy matches are normalised, novel values captured. |
 
 ### Nested objects
 

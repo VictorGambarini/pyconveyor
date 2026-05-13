@@ -22,11 +22,11 @@ steps:
     model: default
     prompt: prompts/extract.j2
     schema:
-      vendor:
+      title:
         type: str
-        description: "Company name as written on the invoice."
-      amount: float
-      due_date: str | None
+        description: "Paper title exactly as written."
+      authors: list[str]
+      doi: str | None
 ```
 
 For advanced validation (cross-field rules, computed fields), you can add a `schemas.py`:
@@ -40,6 +40,59 @@ your_project/
 ```
 
 pyconveyor owns the runner. You own the steps, schemas, and prompts.
+
+## Controlled vocabularies
+
+Vocabularies live in a `vocabularies/` directory alongside `pipeline.yaml`:
+
+```
+your_project/
+├── pipeline.yaml
+├── vocabularies/
+│   ├── organism.yaml
+│   └── material.yaml
+└── prompts/
+    └── extract.j2
+```
+
+Define a vocabulary in YAML:
+
+```yaml
+# vocabularies/organism.yaml
+known:
+  - Escherichia coli
+  - Saccharomyces cerevisiae
+  - Bacillus subtilis
+label: organism
+growth_policy: auto
+```
+
+Reference it on a schema field:
+
+```yaml
+schema:
+  organism:
+    type: str
+    description: "Primary organism studied."
+    vocab: organism     # loads vocabularies/organism.yaml
+```
+
+Or define a small vocabulary inline:
+
+```yaml
+schema:
+  study_type:
+    type: str
+    description: "Type of study."
+    vocab:
+      terms:
+        - in vitro
+        - in vivo
+        - in silico
+      description: "Controlled vocabulary for study type."
+```
+
+Vocab normalisation is automatic — exact matches pass through, fuzzy matches are normalised to the closest known term, and novel values are captured as suggestions for review.
 
 ## Pipeline execution model
 
@@ -115,7 +168,7 @@ steps:
     type: transform
     fn: steps:summarise
     inputs:
-      text:    "{{ ctx.document }}"
+      text:    "{{ ctx.paper }}"
       primary: "{{ steps.extract.value }}"
 ```
 

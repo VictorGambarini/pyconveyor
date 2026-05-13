@@ -25,17 +25,15 @@ pyconveyor init my_pipeline/ --interactive
 cd my_pipeline/
 ```
 
-> **Screenshot placeholder:** terminal showing the interactive `pyconveyor init --interactive` prompts — asking for subject, field definitions, and provider choice.
-
 You'll be asked:
 
-1. **What are you extracting from?** (e.g. `invoices`, `articles`) — used as a label
+1. **What are you extracting from?** (e.g. `papers`, `articles`) — used as a label
 2. **Output fields** — one per line, in `name:type` format:
    ```
-   > invoice_number:str
-   > vendor:str
-   > amount:float
-   > due_date:str | None
+   > title:str
+   > authors:list[str]
+   > doi:str | None
+   > publication_year:int
    >              ← press Enter to finish
    ```
 3. **Which LLM provider?** — OpenAI, Anthropic, or Ollama
@@ -56,10 +54,10 @@ steps:
     model: default
     prompt: prompts/extract.j2
     schema:
-      invoice_number: str
-      vendor: str
-      amount: float
-      due_date: str | None
+      title: str
+      authors: list[str]
+      doi: str | None
+      publication_year: int
     max_attempts: 3
 ```
 
@@ -69,19 +67,20 @@ You can add descriptions to any field — they are injected into the LLM prompt 
 
 ```yaml
     schema:
-      invoice_number:
+      title:
         type: str
-        description: "Invoice identifier exactly as printed (e.g. INV-2024-001)."
-      vendor:
-        type: str
-        description: "Vendor company name."
-        min_length: 1
-      amount:
-        type: float
-        description: "Total invoice amount, numeric only (no currency symbol)."
-      due_date:
+        description: "Paper title exactly as written, including subtitle."
+      authors:
+        type: list[str]
+        description: "All author names in order, with affiliations."
+        min_items: 1
+      doi:
         type: str | None
-        description: "Due date in YYYY-MM-DD format. Null if not stated."
+        description: "DOI if present. Null if not found."
+        pattern: "^10\\.[0-9]{4,}/.+$"
+      publication_year:
+        type: int
+        description: "Four-digit year of publication."
 ```
 
 See the **[YAML Schema guide](guides/yaml-schema.md)** for field constraints, nested objects, and `on_fail` behaviour.
@@ -131,7 +130,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ## Run
 
 ```bash
-pyconveyor run pipeline.yaml --input '{"document": "Invoice from Acme Corp, $4,250 due 2024-03-15"}'
+pyconveyor run pipeline.yaml --input '{"paper": "Smith et al. (2024) demonstrate that CRISPR-Cas9 gene editing achieves 94% efficiency in primary human T cells."}'
 ```
 
 Output:
@@ -140,10 +139,10 @@ Output:
 {
   "steps": {
     "extract": {
-      "invoice_number": null,
-      "vendor": "Acme Corp",
-      "amount": 4250.0,
-      "due_date": "2024-03-15"
+      "title": "CRISPR-Cas9 Gene Editing in Primary Human T Cells",
+      "authors": ["J. Smith", "A. Chen", "M. Patel"],
+      "doi": "10.1038/s41586-024-01234",
+      "publication_year": 2024
     }
   },
   "summary": {
@@ -189,7 +188,7 @@ For multi-step pipelines this shows the full step DAG. Paste it into GitHub, Git
 from pyconveyor import PipelineRunner
 
 runner = PipelineRunner("my_pipeline/pipeline.yaml")
-result = runner.run({"document": "Full text of the document…"})
+result = runner.run({"paper": "Full text of the paper…"})
 
 if result.failed:
     print("Failed at step:", result.failure_state.step_name)
@@ -204,9 +203,9 @@ else:
 ## Process many documents at once
 
 ```bash
-# input.jsonl — one document per line
-echo '{"id": "1", "document": "Invoice from Acme…"}' >> input.jsonl
-echo '{"id": "2", "document": "Receipt from Beta…"}' >> input.jsonl
+# input.jsonl — one paper per line
+echo '{"id": "1", "paper": "Smith et al. demonstrate..."}' >> input.jsonl
+echo '{"id": "2", "paper": "Chen et al. report..."}' >> input.jsonl
 
 pyconveyor batch pipeline.yaml --input input.jsonl --output results.jsonl --workers 8
 ```
@@ -215,18 +214,19 @@ pyconveyor batch pipeline.yaml --input input.jsonl --output results.jsonl --work
 
 ## Measure accuracy with benchmarking
 
-Once you have some documents with known-correct outputs, benchmark your pipeline:
+Once you have some papers with known-correct outputs, benchmark your pipeline:
 
 ```bash
 # Create a benchmark case
-mkdir -p benchmarks/case_001
-cat > benchmarks/case_001/input.yaml << 'EOF'
-document: "Invoice from Acme Corp, $4,250"
+mkdir -p benchmarks/paper_001
+cat > benchmarks/paper_001/input.yaml << 'EOF'
+paper: "Smith et al. (2024) demonstrate that CRISPR-Cas9 gene editing achieves 94% efficiency in primary human T cells."
 EOF
-cat > benchmarks/case_001/expected.yaml << 'EOF'
+cat > benchmarks/paper_001/expected.yaml << 'EOF'
 extract:
-  vendor: "Acme Corp"
-  amount: 4250.0
+  title: "CRISPR-Cas9 Gene Editing in Primary Human T Cells"
+  authors: ["J. Smith", "A. Chen", "M. Patel"]
+  doi: "10.1038/s41586-024-01234"
 EOF
 
 # Run the benchmark

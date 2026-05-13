@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.0] — 2026-05-13
+
+### Added
+- **Vocabularies on schema fields** — vocabularies are now declared directly on schema fields
+  rather than at the pipeline level. Define them inline with `vocab: { terms: [...] }` or by
+  convention-based file reference (`vocab: organism` → `vocabularies/organism.yaml`).
+- **Automatic vocab normalisation** — vocab normalisation is baked into generated Pydantic models
+  via `model_validator(mode='before')`, so any schema with vocab fields gets normalisation for
+  free — exact matches pass through, fuzzy matches are normalised, and novel values are captured
+  as suggestions.
+- **Eager vocabularies directory loading** — all `.yaml`/`.yml` files in the `vocabularies/`
+  directory (relative to the pipeline YAML) are loaded at startup. No pipeline-level declaration
+  needed.
+- **Schema-filtered vocab injection** — only vocabularies referenced by a step's schema fields are
+  injected into the LLM prompt context. No more passing all vocabs to every step.
+- **Inline vocab restrictions** — inline vocabs (defined directly on a field) are restricted to
+  `growth_policy=auto` only, with no `persist`. File-based vocabs support all growth policies.
+- **`vocabularies/` directory scaffolded** by `pyconveyor init`.
+- **`pyconveyor vocab review`** now scans the `vocabularies/` directory directly.
+
+### Removed
+- **Pipeline-level `vocabularies:` block** — vocabularies are now loaded from the `vocabularies/`
+  directory and referenced on schema fields. The old pipeline-level block is no longer supported.
+  This is a **breaking change** to the YAML schema.
+
+### Changed
+- **`concepts.md`** updated: vocabs now live in the `vocabularies/` directory, referenced from
+  schema fields.
+- **`SCHEMA.md`** updated: removed `vocabularies` top-level key, expanded the `vocab` field key
+  documentation.
+
 ## [1.5.0] — 2026-05-12
 
 ### Added
@@ -246,6 +277,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ISSUE-003**: `pyconveyor validate` / `pyconveyor run` now insert the pipeline directory into `sys.path` so local schema modules are importable without installation.
 - **ISSUE-004**: `pyconveyor run --input` now accepts an inline JSON string starting with `{` or `[`, eliminating the spurious `FileNotFoundError` on inline JSON input.
 
+[1.6.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/VictorGambarini/pyconveyor/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/VictorGambarini/pyconveyor/compare/v1.2.0...v1.3.0

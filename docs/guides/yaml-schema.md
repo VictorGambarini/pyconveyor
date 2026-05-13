@@ -13,10 +13,10 @@ steps:
     model: default
     prompt: prompts/extract.j2
     schema:
-      invoice_number: str
-      vendor: str
-      amount: float
-      due_date: str | None
+      title: str
+      authors: list[str]
+      doi: str | None
+      publication_year: int
     max_attempts: 3
 ```
 
@@ -54,21 +54,22 @@ steps:
     model: default
     prompt: prompts/extract.j2
     schema:
-      vendor:
+      title:
         type: str
-        description: "Company name exactly as written on the invoice."
+        description: "Paper title exactly as written, including subtitle."
         min_length: 1
-      amount:
-        type: float
-        description: "Total invoice amount in the invoice's currency."
-      currency:
+      authors:
+        type: list[str]
+        description: "All author names in publication order."
+        min_items: 1
+      doi:
         type: str | None
-        description: "ISO 4217 currency code (USD, EUR, GBP). Null if not stated."
-        pattern: "^[A-Z]{3}$"
+        description: "DOI if listed. Null if not found."
+        pattern: "^10\\.[0-9]{4,}/.+$"
         on_fail: null
-      due_date:
-        type: str | None
-        description: "Due date in YYYY-MM-DD format. Null if not stated."
+      publication_year:
+        type: int
+        description: "Four-digit year of publication."
 ```
 
 ### Rich field keys
@@ -83,7 +84,7 @@ steps:
 | `min_items` | no | Minimum list length (lists only). |
 | `max_items` | no | Maximum list length (lists only). |
 | `on_fail` | no | What to do when a constraint is violated: `error` (default), `null`, or `warn`. |
-| `vocab` | no | Name of a vocabulary from the top-level `vocabularies:` block. Hint only — does not enforce. |
+| `vocab` | no | Filename in `vocabularies/` directory (e.g. `organism` → `vocabularies/organism.yaml`) or inline dict `{terms: [...], description: ...}`. Vocab normalisation runs automatically — fuzzy matches are normalised, novel values are captured as suggestions. |
 
 ### `on_fail` values
 

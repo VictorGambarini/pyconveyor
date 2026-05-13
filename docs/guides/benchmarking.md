@@ -8,10 +8,10 @@ Benchmarking lets you measure how well a pipeline performs against a set of docu
 
 ```
 benchmarks/
-├── case_invoice_001/
+├── case_paper_001/
 │   ├── input.yaml      ← what you pass to the pipeline (or input.json)
 │   └── expected.yaml   ← the correct output you expect (or expected.json)
-├── case_invoice_002/
+├── case_paper_002/
 │   ├── input.yaml
 │   └── expected.yaml
 └── ...
@@ -33,7 +33,7 @@ mkdir -p benchmarks/case_001
 
 ```yaml
 # benchmarks/case_001/input.yaml
-document: "Invoice #1042 from Acme Corp. Amount due: $4,250.00. Due date: 2024-03-15."
+paper: "Smith et al. (2024) demonstrate that CRISPR-Cas9 gene editing achieves 94% efficiency in primary human T cells. This breakthrough was published in Nature Biotechnology (doi:10.1038/s41586-024-01234)."
 ```
 
 For large inputs, use `$file` references (resolved relative to the case directory):
@@ -51,10 +51,10 @@ The keys in `expected.yaml` are step names. The values are the fields you want t
 ```yaml
 # benchmarks/case_001/expected.yaml
 extract:
-  invoice_number: "1042"
-  vendor: "Acme Corp"
-  amount: 4250.0
-  due_date: "2024-03-15"
+  title: "CRISPR-Cas9 Gene Editing in Primary Human T Cells"
+  authors: ["J. Smith", "A. Chen", "M. Patel"]
+  doi: "10.1038/s41586-024-01234"
+  publication_year: 2024
 ```
 
 You don't have to cover all steps — only the ones you want to measure.
@@ -121,7 +121,7 @@ If a case has multiple formats for the same role (for example both `input.json` 
 ```json
 {
   "classify": {
-    "label": "invoice",
+    "field": "molecular biology",
     "confidence": 0.95
   }
 }
@@ -408,12 +408,12 @@ generate_report(
 
 ## End-to-end example
 
-This example benchmarks two pipeline versions against 10 labelled invoices.
+This example benchmarks two pipeline versions against 10 labelled papers.
 
 ### Project layout
 
 ```
-invoice_project/
+paper_project/
 ├── pipeline_v1.yaml
 ├── pipeline_v2.yaml
 ├── schemas.py
@@ -433,7 +433,7 @@ invoice_project/
 
 ```json
 {
-  "document": "Invoice #1042 from Acme Corp. Amount due: $4,250.00. Due date: 2024-03-15."
+  "paper": "Smith et al. (2024) demonstrate that CRISPR-Cas9 gene editing achieves 94% efficiency in primary human T cells."
 }
 ```
 
@@ -442,10 +442,10 @@ invoice_project/
 ```json
 {
   "extract": {
-    "invoice_number": "1042",
-    "vendor": "Acme Corp",
-    "amount": 4250.0,
-    "due_date": "2024-03-15"
+    "title": "CRISPR-Cas9 Gene Editing in Primary Human T Cells",
+    "authors": ["J. Smith", "A. Chen", "M. Patel"],
+    "doi": "10.1038/s41586-024-01234",
+    "publication_year": 2024
   }
 }
 ```
@@ -492,7 +492,7 @@ for pipeline_result in summary.pipelines:
 generate_report(
     summary,
     "comparison.html",
-    title="Invoice extraction: v1 vs v2",
+    title="Paper extraction: v1 vs v2",
     sections=["overall_summary", "per_step_accuracy", "pipeline_comparison", "plots"],
 )
 ```
@@ -503,7 +503,7 @@ generate_report(
 
 **Start with one case.** Get a single `input.json` + `expected.json` pair working before you collect 100 cases.
 
-**Name cases clearly.** The case directory name is the label in the report. Use names like `case_invoice_simple`, `case_invoice_foreign_currency`, `case_invoice_multipage` — not `case_001`.
+**Name cases clearly.** The case directory name is the label in the report. Use names like `case_paper_simple`, `case_paper_review`, `case_paper_multiauthor` — not `case_001`.
 
 **Cover edge cases.** The most valuable cases are the ones your pipeline currently gets wrong. Add a case for each known failure mode.
 
