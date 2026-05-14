@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from .benchmark import BenchmarkSummary, PipelineBenchmarkResult
+from .benchmark import BenchmarkSummary
 from .graph import generate_mermaid
 
 # Sections available in a report, in display order.
@@ -145,8 +145,6 @@ def _render_html(
 def _stats_bar(summary: BenchmarkSummary) -> str:
     total_cases = sum(len(pr.cases) for pr in summary.pipelines)
     threshold = summary.pass_threshold
-    ok_cases = sum(sum(1 for c in pr.cases if c.status == "ok") for pr in summary.pipelines)
-    error_cases = sum(sum(1 for c in pr.cases if c.status == "error") for pr in summary.pipelines)
     pass_cases = sum(
         sum(1 for c in pr.cases if c.status == "ok" and c.overall_score >= threshold)
         for pr in summary.pipelines
@@ -787,8 +785,8 @@ def _build_unified_diff(
     exp_lines: list[str], act_lines: list[str], step_name: str
 ) -> str:
     """Build a unified diff (mobile)."""
-    a_lines = [l.rstrip("\n") for l in exp_lines]
-    b_lines = [l.rstrip("\n") for l in act_lines]
+    a_lines = [line.rstrip("\n") for line in exp_lines]
+    b_lines = [line.rstrip("\n") for line in act_lines]
     udiff = difflib.unified_diff(a_lines, b_lines, fromfile="Expected", tofile="Actual")
     result: list[str] = []
     for line in udiff:
