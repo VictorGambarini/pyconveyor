@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.0] — 2026-05-14
+
+### Added
+
+- **Output format matching** — benchmark output files now match the input format: YAML input produces YAML step outputs, JSON input produces JSON. A `--output-format` CLI flag overrides per-case matching, and `final_as` with a `.yaml` or `.json` extension controls the final output format independently.
+- **HTML benchmark report enhancements**:
+  - **Side-by-side diffs** — each case now includes a "diff" toggle that expands a `difflib.HtmlDiff` comparison of expected vs actual values for every scored step.
+  - **Color-coded field rows** — field-level score rows in the case breakdown table are now color-coded (green=pass, red=fail, yellow=partial, gray=ignored).
+  - **Collapsible detail sections** — the per-field detail view (▾ toggle) now works reliably with CSS-safe IDs for case and step names containing dots or special characters.
+
 ## [1.8.0] — 2026-05-14
 
 ### Added
