@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.10.0] — 2026-05-14
+
+### Changed
+
+- **Benchmark report redesign** — the HTML benchmark report has been completely redesigned with a custom CSS design system, removing all Bootstrap and external font dependencies. The new layout features a sticky sidebar table of contents, individual case cards with expand/collapse, a compact stats bar, and responsive breakpoints for mobile.
+- **Custom diff renderer** — the `difflib.HtmlDiff` comparison view has been replaced with a custom side-by-side diff table on desktop and a unified diff on mobile. Changed words within lines are highlighted with character-level precision.
+- **Score-based pass/fail** — benchmark case cards now classify pass/fail based on `overall_score >= pass_threshold` instead of raw execution status, so low-accuracy cases are correctly shown as failures.
+
+### Fixed
+
+- Correct Chart.js SRI integrity hash for CDN loading with subresource integrity verification.
+
 ## [1.9.0] — 2026-05-14
 
 ### Added
