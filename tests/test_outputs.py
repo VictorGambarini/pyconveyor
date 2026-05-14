@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from pyconveyor import PipelineRunner
 from pyconveyor.errors import PipelineLoadError, StepConfigError
@@ -496,3 +497,223 @@ steps:
         PipelineRunner(pipeline_file).run({"name": "Ada", "output_dir": str(out_dir)})
         # final_as should not be written when there is nothing to write
         assert not (out_dir / "final.json").exists()
+
+
+# ── Output format (YAML / JSON) ─────────────────────────────────────────────────
+
+
+class TestOutputFormat:
+    """Tests for _output_format injection — YAML in → YAML out, etc."""
+
+    def test_default_output_is_json(self, tmp_path: Path):
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "hi", "language": "en"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: greet
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run({"name": "Ada", "output_dir": str(out_dir)})
+        assert (out_dir / "greet.json").exists()
+        assert json.loads((out_dir / "greet.json").read_text())
+
+    def test_yaml_output_when_injected(self, tmp_path: Path):
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "hi", "language": "en"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: greet
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run(
+            {"name": "Ada", "output_dir": str(out_dir), "_output_format": "yaml"}
+        )
+        assert (out_dir / "greet.yaml").exists()
+        data = yaml.safe_load((out_dir / "greet.yaml").read_text())
+        assert data["message"] == "hi"
+        assert data["language"] == "en"
+
+    def test_yaml_output_pydantic_model(self, tmp_path: Path):
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "bonjour", "language": "fr"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: greet
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run(
+            {"name": "Ada", "output_dir": str(out_dir), "_output_format": "yaml"}
+        )
+        assert (out_dir / "greet.yaml").exists()
+        data = yaml.safe_load((out_dir / "greet.yaml").read_text())
+        assert data == {"message": "bonjour", "language": "fr"}
+
+    def test_final_as_extension_controls_format(self, tmp_path: Path):
+        """final_as with .yaml extension writes YAML regardless of _output_format."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "ciao", "language": "it"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+  final_as: result.yaml
+
+steps:
+  - name: greet
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run(
+            {"name": "Ada", "output_dir": str(out_dir), "_output_format": "json"}
+        )
+        assert (out_dir / "result.yaml").exists()
+        data = yaml.safe_load((out_dir / "result.yaml").read_text())
+        assert data["message"] == "ciao"
+
+    def test_explicit_save_respects_extension(self, tmp_path: Path):
+        """Explicit save: custom.yaml writes YAML regardless of _output_format."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: mock-model
+    mock_responses:
+      - '{"message": "hola", "language": "es"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: greet
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+    save: custom.yaml
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run(
+            {"name": "Ada", "output_dir": str(out_dir), "_output_format": "json"}
+        )
+        assert (out_dir / "custom.yaml").exists()
+        data = yaml.safe_load((out_dir / "custom.yaml").read_text())
+        assert data["message"] == "hola"
+
+    def test_ensemble_members_use_output_format(self, tmp_path: Path):
+        yaml_text = """
+models:
+  primary:
+    provider: mock
+    model: mock-primary
+    mock_responses:
+      - '{"message": "hi", "language": "en"}'
+  reviewer:
+    provider: mock
+    model: mock-reviewer
+    mock_responses:
+      - '{"message": "hey", "language": "en"}'
+  judge_model:
+    provider: mock
+    model: mock-judge
+    mock_responses:
+      - '{"message": "hi", "language": "en"}'
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+
+steps:
+  - name: extract
+    type: ensemble
+    schema: tests.fixtures.schemas:Greeting
+    prompt: greet.j2
+    members:
+      - model: primary
+        name: primary
+      - model: reviewer
+        name: reviewer
+        required: false
+    judge:
+      model: judge_model
+      condition: all_succeeded
+"""
+        pipeline_file = _write_pipeline(tmp_path, yaml_text)
+        out_dir = tmp_path / "out"
+        PipelineRunner(pipeline_file).run(
+            {"name": "Ada", "output_dir": str(out_dir), "_output_format": "yaml"}
+        )
+        assert (out_dir / "extract.yaml").exists()
+        assert (out_dir / "extract.primary.yaml").exists()
+        assert (out_dir / "extract.reviewer.yaml").exists()
+
+    def test_final_as_collision_with_yaml_step_name_raises(self, tmp_path: Path):
+        """final_as that matches a step's auto-generated .yaml name must raise."""
+        yaml_text = """
+models:
+  default:
+    provider: mock
+    model: m
+    mock_responses: ['{"message":"hi","language":"en"}']
+
+outputs:
+  dir: "{{ ctx.output_dir }}"
+  final_as: step_a.yaml
+
+steps:
+  - name: step_a
+    type: llm
+    model: default
+    prompt: greet.j2
+    schema: tests.fixtures.schemas:Greeting
+"""
+        p = tmp_path / "bad.yaml"
+        p.write_text(yaml_text)
+        with pytest.raises(PipelineLoadError, match="collides"):
+            PipelineRunner(p)

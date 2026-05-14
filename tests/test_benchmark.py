@@ -908,3 +908,173 @@ class TestListMatching:
         s = self._run_case(tmp_path, {"extract": ["a", "b"]})
         ss = s.pipelines[0].cases[0].step_scores["extract"]
         assert ss.score == 0.0
+
+
+# ── Report helpers ─────────────────────────────────────────────────────────────
+
+
+class TestReportHelpers:
+    def test_css_safe_replaces_special_chars(self):
+        from pyconveyor.report import _css_safe
+
+        assert _css_safe("10.1128_mbio.00335-25") == "10-1128_mbio-00335-25"
+        assert _css_safe("extract.primary") == "extract-primary"
+        assert _css_safe("simple-name") == "simple-name"
+        assert _css_safe("a[0]") == "a-0-"
+        assert _css_safe("hello world") == "hello-world"
+
+    def test_css_safe_keeps_safe_chars(self):
+        from pyconveyor.report import _css_safe
+
+        assert _css_safe("abc123_-") == "abc123_-"
+
+    def test_field_row_class_scored(self):
+        from pyconveyor.report import _field_row_class
+
+        assert _field_row_class(1.0, "scored") == "table-success"
+        assert _field_row_class(0.0, "scored") == "table-danger"
+        assert _field_row_class(0.5, "scored") == "table-warning"
+        assert _field_row_class(0.0, "ignored") == "table-secondary"
+
+    def test_render_step_diff_contains_expected_elements(self):
+        from pyconveyor.report import _render_step_diff
+
+        html = _render_step_diff(
+            "case1", "greet",
+            {"message": "Bonjour!", "language": "French"},
+            {"message": "Hello!", "language": "French"},
+        )
+        assert 'id="diff-case1-greet"' in html
+        assert "Bonjour" in html
+        assert "Hello" in html
+        assert "diff-table" in html
+        assert "Expected" in html
+        assert "Actual" in html
+
+    def test_report_contains_css_safe_ids(self, tmp_path: Path):
+        from pyconveyor.benchmark import BenchmarkRunner
+        from pyconveyor.report import generate_report
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        benchmarks = Path(__file__).parent / "fixtures" / "benchmarks"
+        runner = BenchmarkRunner(benchmarks, pipelines=[pipelines / "hello.yaml"])
+        s = runner.run()
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        html = out.read_text(encoding="utf-8")
+        # IDs should use css-safe versions — no dots in id attributes
+        assert 'id="d-case_greeting' in html
+        assert 'href="#d-case_greeting' in html
+
+    def test_report_contains_diff_section(self, tmp_path: Path):
+        from pyconveyor.benchmark import BenchmarkRunner
+        from pyconveyor.report import generate_report
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        benchmarks = Path(__file__).parent / "fixtures" / "benchmarks"
+        runner = BenchmarkRunner(benchmarks, pipelines=[pipelines / "hello.yaml"])
+        s = runner.run()
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        html = out.read_text(encoding="utf-8")
+        assert "diff-collapse" in html
+
+
+# ── CaseResult actuals/expecteds ────────────────────────────────────────────────
+
+
+class TestCaseResultPayloads:
+    def test_actuals_populated_for_success(self, tmp_path: Path):
+        import json
+
+        from pyconveyor.benchmark import BenchmarkRunner
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        case = tmp_path / "c"
+        case.mkdir()
+        (case / "input.json").write_text(
+            json.dumps({"name": "Ada", "language": "French"})
+        )
+        (case / "expected.json").write_text(
+            json.dumps({"greet": {"message": "Bonjour Ada!", "language": "French"}})
+        )
+        runner = BenchmarkRunner(tmp_path, pipelines=[pipelines / "hello.yaml"])
+        s = runner.run()
+        cr = s.pipelines[0].cases[0]
+        assert cr.actuals == {"greet": {"message": "Bonjour Ada!", "language": "French"}}
+        assert cr.expecteds == {"greet": {"message": "Bonjour Ada!", "language": "French"}}
+
+    def test_expecteds_is_copy_of_expected(self, tmp_path: Path):
+        import json
+
+        from pyconveyor.benchmark import BenchmarkRunner
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        case = tmp_path / "c"
+        case.mkdir()
+        (case / "input.json").write_text(
+            json.dumps({"name": "Ada", "language": "French"})
+        )
+        (case / "expected.json").write_text(
+            json.dumps({"greet": "$ignore", "other": {"x": 1}})
+        )
+        runner = BenchmarkRunner(tmp_path, pipelines=[pipelines / "hello.yaml"])
+        s = runner.run()
+        cr = s.pipelines[0].cases[0]
+        assert cr.expecteds == {"greet": "$ignore", "other": {"x": 1}}
+
+
+# ── Benchmark output_format ─────────────────────────────────────────────────────
+
+
+class TestBenchmarkOutputFormat:
+    def test_input_format_tracked_per_case(self, tmp_path: Path):
+        from pyconveyor.benchmark import BenchmarkRunner
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        case = tmp_path / "c"
+        case.mkdir()
+        (case / "input.yaml").write_text("name: Ada\nlanguage: French\n")
+        (case / "expected.yaml").write_text(
+            "greet:\n  message: Bonjour Ada!\n  language: French\n"
+        )
+        runner = BenchmarkRunner(tmp_path, pipelines=[pipelines / "hello.yaml"])
+        assert runner._cases[0]["_input_format"] == "yaml"
+
+    def test_cli_output_format_override(self, tmp_path: Path):
+        from pyconveyor.benchmark import BenchmarkRunner
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        case = tmp_path / "c"
+        case.mkdir()
+        (case / "input.yaml").write_text("name: Ada\nlanguage: French\n")
+        (case / "expected.yaml").write_text(
+            "greet:\n  message: Bonjour Ada!\n  language: French\n"
+        )
+        runner = BenchmarkRunner(
+            tmp_path,
+            pipelines=[pipelines / "hello.yaml"],
+            output_format="json",
+        )
+        summary = runner.run()
+        cr = summary.pipelines[0].cases[0]
+        assert cr.status == "ok"
+
+    def test_output_format_injected_into_case_input(self, tmp_path: Path):
+        from pyconveyor.benchmark import BenchmarkRunner
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        case = tmp_path / "c"
+        case.mkdir()
+        (case / "input.yaml").write_text("name: Ada\nlanguage: French\n")
+        (case / "expected.yaml").write_text(
+            "greet:\n  message: Bonjour Ada!\n  language: French\n"
+        )
+        runner = BenchmarkRunner(
+            tmp_path,
+            pipelines=[pipelines / "hello.yaml"],
+            output_format="yaml",
+        )
+        summary = runner.run()
+        cr = summary.pipelines[0].cases[0]
+        assert cr.status == "ok"

@@ -56,6 +56,8 @@ class CaseResult:
     error: str | None
     elapsed_seconds: float
     attempt_logs: list[AttemptLog] = field(default_factory=list)
+    actuals: dict[str, Any] = field(default_factory=dict)
+    expecteds: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -133,12 +135,14 @@ class BenchmarkRunner:
         comparators: dict[str, Callable[[Any, Any], float]] | None = None,
         pass_threshold: float = 1.0,
         schemas: dict[str, type] | None = None,
+        output_format: str | None = None,
     ) -> None:
         self._benchmark_dir = Path(benchmark_dir)
         self._pipeline_paths = [Path(p) for p in pipelines]
         self._comparators: dict[str, Callable[[Any, Any], float]] = comparators or {}
         self._pass_threshold = pass_threshold
         self._schemas = schemas
+        self._output_format = output_format  # None, "json", or "yaml"
         self._cases = self._discover_cases()
 
     # ── Case discovery ─────────────────────────────────────────────────────────
@@ -152,8 +156,8 @@ class BenchmarkRunner:
         for case_dir in sorted(self._benchmark_dir.iterdir()):
             if not case_dir.is_dir():
                 continue
-            input_payload = self._load_case_payload(case_dir, "input")
-            expected_payload = self._load_case_payload(case_dir, "expected")
+            input_payload, input_fmt = self._load_case_payload(case_dir, "input")
+            expected_payload, _ = self._load_case_payload(case_dir, "expected")
             if input_payload is None or expected_payload is None:
                 logger.debug(
                     "Skipping %s: missing input.{json,yaml,yml} or expected.{json,yaml,yml}",
@@ -170,10 +174,11 @@ class BenchmarkRunner:
                 "name": case_dir.name,
                 "input": self._expand_file_refs(input_payload, case_dir),
                 "expected": expected_payload,
+                "_input_format": input_fmt,
             })
         return cases
 
-    def _load_case_payload(self, case_dir: Path, stem: str) -> Any | None:
+    def _load_case_payload(self, case_dir: Path, stem: str) -> tuple[Any | None, str]:
         candidates = [
             case_dir / f"{stem}.json",
             case_dir / f"{stem}.yaml",
@@ -181,7 +186,7 @@ class BenchmarkRunner:
         ]
         existing = [p for p in candidates if p.exists()]
         if not existing:
-            return None
+            return None, ""
         if len(existing) > 1:
             names = ", ".join(p.name for p in existing)
             raise ValueError(
@@ -189,10 +194,11 @@ class BenchmarkRunner:
             )
 
         payload_file = existing[0]
+        fmt = "json" if payload_file.suffix == ".json" else "yaml"
         text = payload_file.read_text(encoding="utf-8")
         if payload_file.suffix == ".json":
-            return json.loads(text)
-        return yaml.safe_load(text)
+            return json.loads(text), fmt
+        return yaml.safe_load(text), fmt
 
     def _expand_file_refs(self, value: Any, case_dir: Path) -> Any:
         if isinstance(value, dict):
@@ -243,9 +249,14 @@ class BenchmarkRunner:
         pipeline_path: Path,
         case: dict[str, Any],
     ) -> CaseResult:
+        # Resolve output format: CLI flag > input format > json default
+        output_format = self._output_format or case.get("_input_format", "json")
+        case_input = dict(case["input"])
+        case_input["_output_format"] = output_format
+
         t0 = time.perf_counter()
         try:
-            rctx = runner.run(case["input"])
+            rctx = runner.run(case_input)
         except Exception as exc:
             logger.warning("Case '%s' raised: %s", case["name"], exc)
             return CaseResult(
@@ -274,6 +285,8 @@ class BenchmarkRunner:
 
         expected: dict[str, Any] = case["expected"]
         step_scores: dict[str, StepScore] = {}
+        actuals: dict[str, Any] = {}
+        expecteds: dict[str, Any] = dict(expected)
 
         for step_name, expected_value in expected.items():
             sr = rctx.steps.get(step_name)
@@ -291,6 +304,10 @@ class BenchmarkRunner:
                 status=status,
                 field_scores=fscores,
             )
+            act = sr.value
+            if hasattr(act, "model_dump"):
+                act = act.model_dump()
+            actuals[step_name] = act
 
         scored = [s.score for s in step_scores.values() if s.status == "scored"]
         overall = sum(scored) / len(scored) if scored else 0.0
@@ -305,6 +322,8 @@ class BenchmarkRunner:
             error=None,
             elapsed_seconds=elapsed,
             attempt_logs=summary.attempt_logs,
+            actuals=actuals,
+            expecteds=expecteds,
         )
 
     # ── Scoring ────────────────────────────────────────────────────────────────

@@ -1,10 +1,15 @@
 """Report generation for BenchmarkSummary — HTML (default) and PDF export."""
 from __future__ import annotations
 
+import difflib
+import html
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from .benchmark import BenchmarkSummary, PipelineBenchmarkResult
 from .graph import generate_mermaid
@@ -21,6 +26,9 @@ ALL_SECTIONS = [
 ]
 
 DEFAULT_SECTIONS = [s for s in ALL_SECTIONS if s != "attempt_logs"]
+
+# Number of context lines shown around each diff hunk.
+_DIFF_CONTEXT_LINES = 3
 
 
 def generate_report(
@@ -269,6 +277,7 @@ def _case_table(pr: PipelineBenchmarkResult) -> str:
     header = "<th>Case</th><th>Status</th><th>Overall</th>"
     for s in all_steps:
         header += f"<th>{_esc(s)}</th>"
+    header += "<th>Diff</th>"
 
     rows: list[str] = []
     for c in pr.cases:
@@ -293,8 +302,10 @@ def _case_table(pr: PipelineBenchmarkResult) -> str:
             else:
                 cell = _score_badge(ss.score)
                 if ss.field_scores and len(ss.field_scores) > 1:
+                    css_id = _css_safe(f"d-{c.case_name}-{s}")
                     detail_rows = "".join(
-                        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                        '<tr class="{}"><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
+                            _field_row_class(f.score, f.status),
                             _esc(f.field),
                             _repr(f.actual),
                             _repr(f.expected),
@@ -305,18 +316,42 @@ def _case_table(pr: PipelineBenchmarkResult) -> str:
                         for f in ss.field_scores
                     )
                     detail = (
-                        f'<div class="collapse" id="d-{_esc(c.case_name)}-{_esc(s)}">'
+                        f'<div class="collapse" id="{css_id}">'
                         f'<table class="table table-sm mt-1"><thead><tr>'
                         f"<th>Field</th><th>Actual</th><th>Expected</th><th>Score</th>"
                         f"</tr></thead><tbody>{detail_rows}</tbody></table></div>"
                     )
                     toggle = (
                         f' <a class="text-decoration-none" data-bs-toggle="collapse"'
-                        f' href="#d-{_esc(c.case_name)}-{_esc(s)}" title="expand fields">▾</a>'
+                        f' href="#{css_id}" title="expand fields">▾</a>'
                     )
                     row += f"<td>{cell}{toggle}{detail}</td>"
                 else:
                     row += f"<td>{cell}</td>"
+
+        # Diff link + collapsible diff sections for all steps
+        diff_id = _css_safe(f"diff-{c.case_name}")
+        diff_parts: list[str] = []
+        if c.status == "ok":
+            for s in all_steps:
+                ss = c.step_scores.get(s)
+                if ss is None or ss.status in ("missing", "ignored"):
+                    continue
+                exp_val = c.expecteds.get(s)
+                act_val = c.actuals.get(s)
+                if exp_val is not None:
+                    diff_parts.append(
+                        _render_step_diff(c.case_name, s, exp_val, act_val)
+                    )
+        diff_toggle = (
+            f' <a class="text-decoration-none small" data-bs-toggle="collapse"'
+            f' href="#{diff_id}" title="show diff">diff</a>'
+        )
+        diff_container = (
+            f'<div class="collapse" id="{diff_id}">{"".join(diff_parts)}</div>'
+        )
+        row += f"<td>{diff_toggle}{diff_container}</td>"
+
         if c.error:
             row += f"<td colspan='99' class='text-danger small'>{_esc(c.error)}</td>"
         rows.append(f"<tr>{row}</tr>")
@@ -520,6 +555,50 @@ def _repr(val: Any) -> str:
     return _esc(repr(val))
 
 
+def _css_safe(name: str) -> str:
+    """Replace characters that are unsafe in CSS selectors with hyphens."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", str(name))
+
+
+def _field_row_class(score: float, status: str) -> str:
+    if status == "ignored":
+        return "table-secondary"
+    if score >= 1.0:
+        return "table-success"
+    if score <= 0.0:
+        return "table-danger"
+    return "table-warning"
+
+
+def _render_step_diff(
+    case_name: str, step_name: str, expected: Any, actual: Any
+) -> str:
+    """Render a side-by-side HTML diff of expected vs actual values."""
+    exp_str = yaml.dump(
+        expected, sort_keys=False, allow_unicode=True, default_flow_style=False,
+        Dumper=yaml.SafeDumper,
+    )
+    act_str = yaml.dump(
+        actual, sort_keys=False, allow_unicode=True, default_flow_style=False,
+        Dumper=yaml.SafeDumper,
+    )
+    differ = difflib.HtmlDiff(tabsize=2)
+    table = differ.make_table(
+        [html.escape(line) for line in exp_str.splitlines(keepends=True)],
+        [html.escape(line) for line in act_str.splitlines(keepends=True)],
+        fromdesc=f"Expected — {_esc(step_name)}",
+        todesc=f"Actual — {_esc(step_name)}",
+        context=True,
+        numlines=_DIFF_CONTEXT_LINES,
+    )
+    safe_id = _css_safe(f"diff-{case_name}-{step_name}")
+    return (
+        f'<div class="diff-collapse mt-2" id="{safe_id}">'
+        f'<div class="diff-table mb-3">{table}</div>'
+        f"</div>"
+    )
+
+
 # ── PDF export ─────────────────────────────────────────────────────────────────
 
 def _write_pdf(html: str, pdf_path: Path) -> None:
@@ -553,6 +632,10 @@ _HTML_SHELL = """\
     .mermaid {{ background: #fff; border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; }}
     table {{ font-size: .875rem; }}
     code {{ color: #6f42c1; }}
+    .diff-table table {{ width: 100%; table-layout: fixed; }}
+    .diff-table td {{ font-size: .8rem; vertical-align: top; word-break: break-all; }}
+    .diff-table .diff_header {{ font-weight: 600; }}
+    .diff-table .diff_next {{ display: none; }}
   </style>
 </head>
 <body>

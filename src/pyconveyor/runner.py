@@ -64,6 +64,27 @@ def _write_step_json(path: Path, value: Any) -> None:
         logger.warning("Failed to write output '%s': %s", path, exc)
 
 
+def _write_step_yaml(path: Path, value: Any) -> None:
+    """Serialise *value* to YAML and write to *path*, creating parents as needed."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if hasattr(value, "model_dump"):
+            value = value.model_dump()
+        content = yaml.dump(value, allow_unicode=True, sort_keys=False, Dumper=yaml.SafeDumper)
+        path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to write output '%s': %s", path, exc)
+
+
+def _write_step_output(path: Path, value: Any) -> None:
+    """Write *value* to *path*, detecting format from the file extension."""
+    ext = path.suffix.lower()
+    if ext in (".yaml", ".yml"):
+        _write_step_yaml(path, value)
+    else:
+        _write_step_json(path, value)
+
+
 # ── Result data classes ────────────────────────────────────────────────────────
 
 
@@ -1170,7 +1191,12 @@ class PipelineRunner:
         if final_as:
             for step in spec.get("steps", []):
                 if step.get("save", _SAVE_UNSET) is _SAVE_UNSET:
-                    if final_as == f"{step['name']}.json":
+                    collisions = {
+                        f"{step['name']}.json",
+                        f"{step['name']}.yaml",
+                        f"{step['name']}.yml",
+                    }
+                    if final_as in collisions:
                         raise PipelineLoadError(
                             f"'outputs.final_as' ({final_as!r}) collides with the"
                             f" auto-generated filename for step '{step['name']}'."
@@ -1215,7 +1241,7 @@ class PipelineRunner:
             else:
                 final_value = self._resolve_final_result(rctx)
                 if final_value is not None:
-                    _write_step_json(final_dest, final_value)
+                    _write_step_output(final_dest, final_value)
                     logger.debug("Saved final output → %s", final_dest)
 
     def _save_step_result(
@@ -1231,14 +1257,20 @@ class PipelineRunner:
         if sr is None or sr.value is None:
             return
 
-        filename = f"{name}.json" if save is _SAVE_UNSET else str(save)
+        if save is _SAVE_UNSET:
+            fmt = rctx._input.get("_output_format", "json")
+            ext = ".yaml" if fmt == "yaml" else ".json"
+            filename = f"{name}{ext}"
+        else:
+            filename = str(save)
+
         dest = output_dir / filename
         try:
             dest.resolve().relative_to(output_dir.resolve())
         except ValueError:
             logger.warning("Skipping '%s': resolved path escapes output_dir", filename)
             return
-        _write_step_json(dest, sr.value)
+        _write_step_output(dest, sr.value)
 
         # Ensemble: also save each member's result unless the step opted out entirely
         if step.get("type") == "ensemble" and save is _SAVE_UNSET:
@@ -1247,13 +1279,13 @@ class PipelineRunner:
                 sub_key = f"{name}.{member_name}"
                 sub_sr = rctx._step_results.get(sub_key)
                 if sub_sr and sub_sr.value is not None:
-                    sub_dest = output_dir / f"{sub_key}.json"
+                    sub_dest = output_dir / f"{sub_key}{ext}"
                     try:
                         sub_dest.resolve().relative_to(output_dir.resolve())
                     except ValueError:
                         logger.warning("Skipping '%s': resolved path escapes output_dir", sub_key)
                         continue
-                    _write_step_json(sub_dest, sub_sr.value)
+                    _write_step_output(sub_dest, sub_sr.value)
 
     def _resolve_final_result(self, rctx: RunContext) -> Any:
         """Walk backwards through declared steps to find the last non-None result."""
