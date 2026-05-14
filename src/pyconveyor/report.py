@@ -1476,7 +1476,7 @@ _HTML_SHELL = """\
   }}
 </script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
-  integrity="sha384-0EyBPhfu8mG7G2mzK4dJw1fjw/5ORs7+bm4LlyTtuwDnfXyIhU6eN8nbfLY/zy0"
+  integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt"
   crossorigin="anonymous"></script>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
