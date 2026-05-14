@@ -305,6 +305,7 @@ def _section_plots(summary: BenchmarkSummary) -> str:
 
 def _section_case_cards(summary: BenchmarkSummary) -> str:
     parts: list[str] = []
+    threshold = summary.pass_threshold
     for pi, pr in enumerate(summary.pipelines):
         label = Path(pr.pipeline_path).name
         if len(summary.pipelines) > 1:
@@ -312,9 +313,16 @@ def _section_case_cards(summary: BenchmarkSummary) -> str:
                 f'<h3 class="pipeline-label"><code>{_esc(label)}</code></h3>'
             )
 
-        # Split into failed and passed; failures first.
-        failed = [c for c in pr.cases if c.status != "ok"]
-        passed = [c for c in pr.cases if c.status == "ok"]
+        # Split into failed and passed based on score vs threshold.
+        # Cases with execution errors always count as failed.
+        failed = [
+            c for c in pr.cases
+            if c.status == "error" or c.overall_score < threshold
+        ]
+        passed = [
+            c for c in pr.cases
+            if c.status == "ok" and c.overall_score >= threshold
+        ]
 
         if not pr.cases:
             parts.append(
@@ -324,10 +332,10 @@ def _section_case_cards(summary: BenchmarkSummary) -> str:
 
         if failed:
             for c in failed:
-                parts.append(_case_card(c, pi, auto_expand=True))
+                parts.append(_case_card(c, pi, threshold, auto_expand=True))
         if passed:
             for c in passed:
-                parts.append(_case_card(c, pi, auto_expand=False))
+                parts.append(_case_card(c, pi, threshold, auto_expand=False))
 
         if not failed:
             parts.append(
@@ -340,11 +348,12 @@ def _section_case_cards(summary: BenchmarkSummary) -> str:
     return "\n".join(parts)
 
 
-def _case_card(c: Any, pipeline_index: int, auto_expand: bool = False) -> str:
+def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool = False) -> str:
     """Render a single benchmark case as a collapsible card."""
     case_id = _css_safe(f"case-{pipeline_index}-{c.case_name}")
-    status_cls = "case-pass" if c.status == "ok" else "case-fail"
-    status_label = "pass" if c.status == "ok" else "fail"
+    is_pass = c.status == "ok" and c.overall_score >= threshold
+    status_cls = "case-pass" if is_pass else "case-fail"
+    status_label = "pass" if is_pass else "fail"
     expanded = "expanded" if auto_expand else ""
 
     # Collect step names.
