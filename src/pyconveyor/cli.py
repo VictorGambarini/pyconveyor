@@ -121,6 +121,12 @@ def main() -> None:
         default="Pipeline Benchmark Report",
         help="Report title",
     )
+    p_bench.add_argument(
+        "--output-format",
+        choices=["json", "yaml"],
+        default=None,
+        help="Output format for step result files (default: match each case's input format)",
+    )
 
     # vocab
     p_vocab = sub.add_parser("vocab", help="Vocabulary management commands")
@@ -572,6 +578,7 @@ def _cmd_benchmark(args: Any) -> None:
         benchmark_dir=benchmark_dir,
         pipelines=args.pipelines,
         pass_threshold=args.pass_threshold,
+        output_format=args.output_format,
     )
     summary = runner.run()
 
