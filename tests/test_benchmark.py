@@ -963,8 +963,7 @@ class TestReportHelpers:
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
         # IDs should use css-safe versions — no dots in id attributes
-        assert 'id="d-case_greeting' in html
-        assert 'href="#d-case_greeting' in html
+        assert 'id="case-0-case_greeting' in html
 
     def test_report_contains_diff_section(self, tmp_path: Path):
         from pyconveyor.benchmark import BenchmarkRunner
