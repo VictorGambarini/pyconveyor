@@ -986,6 +986,7 @@ class TestReportHelpers:
 class TestCaseResultPayloads:
     def test_actuals_populated_for_success(self, tmp_path: Path):
         import json
+
         from pyconveyor.benchmark import BenchmarkRunner
 
         pipelines = Path(__file__).parent / "fixtures" / "pipelines"
@@ -1005,6 +1006,7 @@ class TestCaseResultPayloads:
 
     def test_expecteds_is_copy_of_expected(self, tmp_path: Path):
         import json
+
         from pyconveyor.benchmark import BenchmarkRunner
 
         pipelines = Path(__file__).parent / "fixtures" / "pipelines"
