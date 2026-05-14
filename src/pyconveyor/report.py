@@ -1,6 +1,6 @@
 """Report generation for BenchmarkSummary — self-contained HTML with no external
-CSS/JS dependencies (Chart.js and Mermaid are loaded from CDN with SRI hashes
-but degrade gracefully when offline)."""
+CSS/JS dependencies (Chart.js is loaded from CDN with SRI; Mermaid is loaded
+via ESM import which does not support SRI)."""
 
 from __future__ import annotations
 
@@ -136,7 +136,6 @@ def _render_html(
         side_nav=side_nav,
         body=body,
         chart_js=_chart_js(summary),
-        has_charts="true" if ("plots" in section_set and summary.pipelines) else "false",
     )
 
 
@@ -145,8 +144,14 @@ def _render_html(
 
 def _stats_bar(summary: BenchmarkSummary) -> str:
     total_cases = sum(len(pr.cases) for pr in summary.pipelines)
+    threshold = summary.pass_threshold
     ok_cases = sum(sum(1 for c in pr.cases if c.status == "ok") for pr in summary.pipelines)
     error_cases = sum(sum(1 for c in pr.cases if c.status == "error") for pr in summary.pipelines)
+    pass_cases = sum(
+        sum(1 for c in pr.cases if c.status == "ok" and c.overall_score >= threshold)
+        for pr in summary.pipelines
+    )
+    fail_cases = total_cases - pass_cases
     pipeline_count = len(summary.pipelines)
 
     pipeline_names = ", ".join(Path(pr.pipeline_path).name for pr in summary.pipelines)
@@ -154,9 +159,8 @@ def _stats_bar(summary: BenchmarkSummary) -> str:
         sum(pr.overall_mean_accuracy for pr in summary.pipelines) / pipeline_count * 100
     ) if pipeline_count > 0 else 0
 
-    failed = total_cases - ok_cases
-    status_label = "pass" if failed == 0 else "fail"
-    status_text = "All passing" if failed == 0 else f"{failed} failed"
+    status_label = "pass" if fail_cases == 0 else "fail"
+    status_text = "All passing" if fail_cases == 0 else f"{fail_cases} failed"
 
     return (
         f'<section id="overall_summary" class="stats-bar">'
@@ -166,8 +170,8 @@ def _stats_bar(summary: BenchmarkSummary) -> str:
         f'</div>'
         f'<div class="stats-right">'
         f'<span class="stat-badge">{total_cases} cases</span>'
-        f'<span class="stat-badge">{ok_cases} ok</span>'
-        f'{_stat("stat-badge stat-err", str(error_cases) + " errors") if error_cases else ""}'
+        f'<span class="stat-badge">{pass_cases} pass</span>'
+        f'{_stat("stat-badge stat-err", str(fail_cases) + " fail") if fail_cases else ""}'
         f'<span class="stat-badge">{overall_pct}% accuracy</span>'
         f'<span class="stat-badge stat-{status_label}">{status_text}</span>'
         f'</div>'
@@ -554,11 +558,14 @@ def _chart_js(summary: BenchmarkSummary) -> str:
     })
 
     js = f"""
-new Chart(document.getElementById('chart-step-accuracy'), {{
-  type: 'bar',
-  data: {chart_data},
-  options: {chart_opts}
-}});"""
+var mainEl = document.getElementById('chart-step-accuracy');
+if (mainEl) {{
+  new Chart(mainEl, {{
+    type: 'bar',
+    data: {chart_data},
+    options: {chart_opts}
+  }});
+}}"""
 
     if len(summary.pipelines) == 2:
         base = summary.pipelines[0]
@@ -725,7 +732,7 @@ def _build_side_by_side_diff(
                 el = html.escape(exp_lines[k].rstrip("\n"))
                 al = html.escape(act_lines[k - i1 + j1].rstrip("\n"))
                 rows.append(
-                    f'<tr><td class="diff-ln">{i1 + k + 1}</td>'
+                    f'<tr><td class="diff-ln">{k + 1}</td>'
                     f'<td class="diff-cell diff-eq"><pre>{el}</pre></td>'
                     f'<td class="diff-ln">{j1 + (k - i1) + 1}</td>'
                     f'<td class="diff-cell diff-eq"><pre>{al}</pre></td></tr>'
@@ -811,18 +818,18 @@ def _word_diff_side_by_side(e_text: str, a_text: str) -> tuple[str, str]:
             a_parts.append(a_text[j1:j2])
         elif tag == "replace":
             e_parts.append(
-                f'<span class="wdiff-del">{html.escape(e_text[i1:i2])}</span>'
+                f'<span class="wdiff-del">{e_text[i1:i2]}</span>'
             )
             a_parts.append(
-                f'<span class="wdiff-add">{html.escape(a_text[j1:j2])}</span>'
+                f'<span class="wdiff-add">{a_text[j1:j2]}</span>'
             )
         elif tag == "delete":
             e_parts.append(
-                f'<span class="wdiff-del">{html.escape(e_text[i1:i2])}</span>'
+                f'<span class="wdiff-del">{e_text[i1:i2]}</span>'
             )
         elif tag == "insert":
             a_parts.append(
-                f'<span class="wdiff-add">{html.escape(a_text[j1:j2])}</span>'
+                f'<span class="wdiff-add">{a_text[j1:j2]}</span>'
             )
     return "".join(e_parts), "".join(a_parts)
 
