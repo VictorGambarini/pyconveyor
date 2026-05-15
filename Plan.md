@@ -1474,6 +1474,121 @@ not desired, set `max_attempts: 1` explicitly or `error_feedback: false`.
 
 ---
 
+## 22. Benchmark report — comparison UX
+
+The benchmark HTML report (`report.py`) makes field-by-field comparison hard because: (a) it serialises actual and expected as raw YAML blobs and diffs the text, so key-order noise drowns out real differences; (b) complex values are shown via `repr()` which is unreadable for dicts and lists; (c) list-of-dict entries have no stable pairing — the reader must mentally map which actual entry corresponds to which expected entry.
+
+### 22.1 Comparison view design
+
+Replace the current YAML text diff section with a **structured field comparison table**. The YAML diff functions (`_render_step_diff`, `_build_side_by_side_diff`, `_build_unified_diff`) are removed. The diff CSS classes are removed.
+
+**Information hierarchy:**
+```
+Case card (collapsible, auto-expanded for failures)
+└── Step section (one per step in expected.yaml)
+    └── Field table
+        ├── Failing rows (surfaced to top, expanded by default)
+        └── Passing rows (collapsed by default, click to expand)
+```
+
+**Field table columns:**
+
+| Field | Expected | Actual | ✓ |
+|-------|----------|--------|---|
+| `entries[0].organism_name` | `Clonostachys rosea` | `Clonostachys rosea` | ✓ |
+| `entries[0].plastic` | `PCL` | `PET` | ✗ |
+| `entries[0].sequence` | `MKFFT…` (truncated) | `MKFFT…` (truncated) | ✓ |
+
+- **Field** column: hierarchical path (`step.field` or `entries[N].field`).  Paths follow the benchmark scorer's `FieldScore.field` naming.
+- **Expected / Actual** columns: scalar values as plain text; dict/list values as inline YAML (`yaml.dump(value, default_flow_style=True)`), monospace font (`--font-mono`), capped at 120 chars with a `[+]` expand toggle (keyboard-accessible `<button>`).
+- **Match** column: `✓` (pass, `aria-label="pass"`), `✗` (fail, `aria-label="fail"`), `~` (partial, `aria-label="partial"`), `—` (ignored).  Icon + colour (`--pass`/`--fail`/`--warn`/`--text-muted`); never colour alone.
+
+**Key ordering — actual reordered to match expected:**
+
+Before building the field table, actual dict keys are reordered to match expected's insertion order. Algorithm (`_reorder_to_expected(actual, expected)`):
+
+1. Walk `expected` key by key.
+2. For each key, if present in `actual`, emit it first.
+3. Collect remaining `actual` keys not in `expected` into a collapsed "Extra fields" section at the bottom (greyed, `--text-muted`).
+4. Apply recursively to nested dicts.
+
+This ensures the table rows appear in the same order as `expected.yaml`, making visual comparison trivial.
+
+**`$ignore` fields:** shown as a greyed row (background `--border-light`, text `--text-muted`), not hidden. This makes it clear which fields were intentionally excluded from scoring.
+
+**List-of-dict entries:** the benchmark scorer uses best-match assignment (Hungarian-style).  The report should surface this pairing explicitly.  For each expected entry `i`, the display shows:
+
+```
+Entry 1  [best-match score: 85%]
+  Field       Expected   Actual  ✓
+  organism    Clono...   Clono...  ✓
+  plastic     PCL        PET       ✗
+  ...
+Entry 2  [best-match score: 100%]
+  ...
+```
+
+When actual has fewer entries than expected, remaining expected entries show `(no match found)` in the Actual column.  When actual has more entries than expected, surplus entries appear in a collapsed "Unmatched actual entries" section.
+
+### 22.2 Value formatting
+
+Replace all `_repr(val)` calls in the field table with `_fmt_value(val)`:
+
+```python
+def _fmt_value(val: Any, truncate: int = 120) -> str:
+    if val is None:
+        return "—"
+    if isinstance(val, (dict, list)):
+        text = yaml.dump(val, default_flow_style=True, allow_unicode=True,
+                         default_style=None, Dumper=yaml.SafeDumper).strip()
+    else:
+        text = str(val)
+    if len(text) > truncate:
+        safe = _esc(text[:truncate])
+        full = _esc(text)
+        return (
+            f'<span class="val-short"><code>{safe}…</code>'
+            f'<button class="val-expand" aria-label="Show full value" '
+            f'onclick="this.closest(\'.val-short\').classList.toggle(\'val-expanded\')">[+]</button>'
+            f'<code class="val-full" hidden>{full}</code></span>'
+        )
+    return f"<code>{_esc(text)}</code>"
+```
+
+CSS for expand toggle:
+```css
+.val-short.val-expanded .val-short-text { display: none; }
+.val-short.val-expanded .val-full { display: inline; }
+.val-expand { background: none; border: none; color: var(--accent); cursor: pointer;
+              font-size: 11px; padding: 0 2px; }
+```
+
+### 22.3 Failing rows surfaced first
+
+Within each step's field table, `FieldScore` entries are rendered in two groups:
+
+1. **Failures** (`score < 1.0` and `status != "ignored"`) — rendered first, rows have `class="field-row field-fail"`, expanded by default.
+2. **Passes + ignored** — rendered after, rows have `class="field-row field-pass"` or `field-ignored"`, collapsed behind a `<summary>X passing fields</summary>` toggle.
+
+This means a case with 20 fields and 2 failures puts the 2 failures at the top; the 18 passing fields are hidden unless the reader wants to verify them.
+
+### 22.4 Reuse existing CSS tokens
+
+No new colour variables. Field table uses:
+- Row backgrounds: `--pass-bg` / `--fail-bg` / `--warn-bg` / `--border-light` (for ignored)
+- Text: `--text`, `--text-muted`
+- Border: `--border`
+- Font: `--font-mono` for value cells
+- Icons: use the existing `--pass`, `--fail`, `--warn` colour variables for the match symbol
+
+### 22.5 What is NOT in scope for this change
+
+- The stats bar, per-step accuracy chart, pipeline comparison, Mermaid graph, and attempt logs sections — untouched.
+- The overall case card collapsible behaviour — untouched.
+- The field table is the only new surface; the step table (Step | Score | Actual | Expected) above it is removed for steps that have field-level detail (since the field table supersedes it).
+
+---
+
 ## 21. Milestones
 
 | Milestone | Deliverables |
@@ -1483,3 +1598,16 @@ not desired, set `max_attempts: 1` explicitly or `error_feedback: false`.
 | **v0.3.0** | Native Anthropic provider; hooks API; `RunContext.summary()` with `cost_estimate`, `validation_warnings`, `cache_hits`/`cache_misses`; `pyconveyor visualise` CLI |
 | **v0.4.0** | Token budget guard (`max_prompt_tokens`); response cache (§12.5); `first_non_none` helper; Read the Docs site live |
 | **v1.0.0** | Stable YAML schema declared; full docs; editor setup guide; migration guide |
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | ISSUES_FOUND (DIFF via /ship) | 4 issues, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 2 | CLEAR (FULL) | score: 1/10 → 9/10, 9 decisions |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**VERDICT:** Design review CLEAR. Eng review ran on prior diff (may be stale — run `/plan-eng-review` to re-validate §22 architecture).
+

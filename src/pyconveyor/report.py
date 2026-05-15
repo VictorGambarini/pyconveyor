@@ -4,8 +4,6 @@ via ESM import which does not support SRI)."""
 
 from __future__ import annotations
 
-import difflib
-import html
 import json
 import re
 from datetime import datetime, timezone
@@ -29,9 +27,6 @@ ALL_SECTIONS = [
 ]
 
 DEFAULT_SECTIONS = [s for s in ALL_SECTIONS if s != "attempt_logs"]
-
-# Number of context lines shown around each diff hunk.
-_DIFF_CONTEXT_LINES = 3
 
 
 def generate_report(
@@ -358,7 +353,7 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
     status_label = "pass" if is_pass else "fail"
     expanded = "expanded" if auto_expand else ""
 
-    # Collect step names.
+    # Collect step names in order.
     all_steps: list[str] = []
     seen_steps: set[str] = set()
     for s in c.step_scores:
@@ -366,84 +361,72 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
             all_steps.append(s)
             seen_steps.add(s)
 
-    # Build step detail rows (always visible, no nested collapse).
-    step_rows: list[str] = []
+    # Separate steps: those with multiple FieldScores (get a field table section)
+    # vs those with 0–1 FieldScores (go in the compact step summary table).
+    simple_steps: list[str] = []
+    detail_steps: list[str] = []
     for step_name in all_steps:
+        ss = c.step_scores.get(step_name)
+        if ss is not None and ss.field_scores and len(ss.field_scores) > 1:
+            detail_steps.append(step_name)
+        else:
+            simple_steps.append(step_name)
+
+    # ── Compact step summary table (missing/ignored/single-FieldScore steps) ──
+    simple_rows: list[str] = []
+    for step_name in simple_steps:
         ss = c.step_scores.get(step_name)
         if ss is None:
             continue
-
         if ss.status == "missing":
-            step_rows.append(
+            simple_rows.append(
                 f'<tr><td><code>{_esc(step_name)}</code></td>'
                 f'<td colspan="3"><span class="badge badge-warn">missing</span></td></tr>'
             )
         elif ss.status == "ignored":
-            step_rows.append(
+            simple_rows.append(
                 f'<tr><td><code>{_esc(step_name)}</code></td>'
                 f'<td colspan="3"><span class="badge badge-muted">ignored</span></td></tr>'
             )
         else:
-            score_cell = _score_badge(ss.score)
-            if ss.field_scores and len(ss.field_scores) > 1:
-                field_rows = "".join(
-                    '<tr class="field-row field-{}"><td></td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
-                        "ignored" if f.status == "ignored" else ("pass" if f.score >= 1.0 else ("fail" if f.score <= 0.0 else "warn")),
-                        _esc(f.field),
-                        _repr(f.actual),
-                        _repr(f.expected),
-                        '<span class="badge badge-muted">ignored</span>' if f.status == "ignored" else _score_badge(f.score),
-                    )
-                    for f in ss.field_scores
-                )
-                field_detail = (
-                    f'<tr class="field-detail"><td colspan="5">'
-                    f'<table class="table table-sm table-nested">'
-                    f'<thead><tr><th></th><th>Field</th><th>Actual</th><th>Expected</th><th>Score</th></tr></thead>'
-                    f'<tbody>{field_rows}</tbody></table></td></tr>'
-                )
-            else:
-                field_detail = ""
-
-            step_rows.append(
+            exp_val = c.expecteds.get(step_name)
+            act_val = _reorder_to_expected(c.actuals.get(step_name), exp_val)
+            simple_rows.append(
                 f'<tr><td><code>{_esc(step_name)}</code></td>'
-                f'<td>{score_cell}</td>'
-                f'<td class="muted"><code>{_repr(c.actuals.get(step_name))}</code></td>'
-                f'<td class="muted"><code>{_repr(c.expecteds.get(step_name))}</code></td>'
+                f'<td>{_score_badge(ss.score)}</td>'
+                f'<td class="val-cell">{_fmt_value(exp_val)}</td>'
+                f'<td class="val-cell">{_fmt_value(act_val)}</td>'
                 f'</tr>'
-                f'{field_detail}'
             )
 
-    step_table = ""
-    if step_rows:
-        step_table = (
+    simple_table = ""
+    if simple_rows:
+        simple_table = (
             f'<table class="table table-sm">'
-            f'<thead><tr><th>Step</th><th>Score</th><th>Actual</th><th>Expected</th></tr></thead>'
-            f'<tbody>{"".join(step_rows)}</tbody></table>'
+            f'<thead><tr>'
+            f'<th>Step</th><th>Score</th><th>Expected</th><th>Actual</th>'
+            f'</tr></thead>'
+            f'<tbody>{"".join(simple_rows)}</tbody></table>'
         )
 
-    # Diff section for this case.
-    diff_parts: list[str] = []
-    if c.status == "ok":
-        for step_name in all_steps:
-            ss = c.step_scores.get(step_name)
-            if ss is None or ss.status in ("missing", "ignored"):
-                continue
-            exp_val = c.expecteds.get(step_name)
-            act_val = c.actuals.get(step_name)
-            if exp_val is not None:
-                diff_parts.append(
-                    _render_step_diff(c.case_name, step_name, exp_val, act_val)
-                )
-
-    diff_section = ""
-    if diff_parts:
-        diff_section = (
-            f'<div class="diff-section">'
-            f'<h5 class="diff-heading">Output Diff</h5>'
-            f'{"".join(diff_parts)}'
-            f"</div>"
+    # ── Field comparison sections (steps with multiple FieldScores) ──
+    detail_sections: list[str] = []
+    for step_name in detail_steps:
+        ss = c.step_scores.get(step_name)
+        if ss is None:
+            continue
+        field_table = _render_field_table(step_name, ss)
+        detail_sections.append(
+            f'<div class="step-section">'
+            f'<div class="step-section-header">'
+            f'<code>{_esc(step_name)}</code>'
+            f'<span class="step-section-score">{_score_badge(ss.score)}</span>'
+            f'</div>'
+            f'{field_table}'
+            f'</div>'
         )
+
+    detail_content = "\n".join(detail_sections)
 
     error_section = ""
     if c.error:
@@ -468,8 +451,8 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
         f"</button>"
         f'<div id="{case_id}-body" class="case-body">'
         f'{error_section}'
-        f'{step_table}'
-        f'{diff_section}'
+        f'{simple_table}'
+        f'{detail_content}'
         f"</div></div>"
     )
 
@@ -661,175 +644,141 @@ def _repr(val: Any) -> str:
     return _esc(repr(val))
 
 
+def _reorder_to_expected(actual: Any, expected: Any) -> Any:
+    """Reorder *actual* dict keys to match *expected*'s insertion order.
+
+    Extra keys in *actual* not present in *expected* are appended at the end.
+    Applied recursively to nested dicts.  Non-dict values are returned unchanged.
+    """
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return actual
+    ordered: dict[str, Any] = {}
+    for key in expected:
+        if key in actual:
+            ordered[key] = _reorder_to_expected(actual[key], expected.get(key))
+    for key in actual:
+        if key not in expected:
+            ordered[key] = actual[key]
+    return ordered
+
+
+def _fmt_value(val: Any, truncate: int = 120) -> str:
+    """Format a field value for display in an HTML table cell.
+
+    Scalars are rendered as plain escaped text; dicts and lists are serialised
+    as YAML inline (``default_flow_style=True``).  Values longer than *truncate*
+    characters are shown truncated with a keyboard-accessible ``[+]`` expand toggle.
+    """
+    if val is None:
+        return '<span class="muted">—</span>'
+    if isinstance(val, (dict, list)):
+        text = yaml.dump(
+            val,
+            default_flow_style=True,
+            allow_unicode=True,
+            Dumper=yaml.SafeDumper,
+        ).strip()
+    else:
+        text = str(val)
+    if len(text) > truncate:
+        safe = _esc(text[:truncate])
+        full = _esc(text)
+        return (
+            f'<span class="val-short">'
+            f'<code class="val-short-text">{safe}…</code>'
+            f'<button class="val-expand" aria-label="Show full value" '
+            f'onclick="this.closest(\'.val-short\').classList.toggle(\'val-expanded\')">[+]</button>'
+            f'<code class="val-full" hidden>{full}</code>'
+            f'</span>'
+        )
+    return f'<code class="mono-cell">{_esc(text)}</code>'
+
+
+def _match_icon(score: float, status: str) -> str:
+    """Return an ARIA-labelled icon span for a field match result."""
+    if status == "ignored":
+        return '<span aria-label="ignored" class="icon-ignored">—</span>'
+    if score >= 1.0:
+        return '<span aria-label="pass" class="icon-pass">✓</span>'
+    if score <= 0.0:
+        return '<span aria-label="fail" class="icon-fail">✗</span>'
+    return '<span aria-label="partial" class="icon-warn">~</span>'
+
+
+def _render_field_table(step_name: str, ss: Any) -> str:
+    """Render a structured field comparison table for a step with multiple FieldScores.
+
+    Failing fields are surfaced first (always visible).  Passing and ignored
+    fields are wrapped in a ``<details>`` collapse to reduce visual noise.
+    """
+    if not ss.field_scores or len(ss.field_scores) <= 1:
+        return ""
+
+    fail_rows: list[str] = []
+    pass_rows: list[str] = []
+
+    for f in ss.field_scores:
+        is_fail = f.score < 1.0 and f.status != "ignored"
+        if f.status == "ignored":
+            row_cls = "field-row field-ignored"
+        elif f.score >= 1.0:
+            row_cls = "field-row field-pass"
+        elif f.score <= 0.0:
+            row_cls = "field-row field-fail"
+        else:
+            row_cls = "field-row field-warn"
+
+        row = (
+            f'<tr class="{row_cls}">'
+            f'<td><code class="field-path">{_esc(f.field)}</code></td>'
+            f'<td class="val-cell">{_fmt_value(f.expected)}</td>'
+            f'<td class="val-cell">{_fmt_value(f.actual)}</td>'
+            f'<td class="icon-cell">{_match_icon(f.score, f.status)}</td>'
+            f'</tr>'
+        )
+        if is_fail:
+            fail_rows.append(row)
+        else:
+            pass_rows.append(row)
+
+    thead = (
+        '<table class="table table-sm field-table">'
+        '<thead><tr>'
+        '<th>Field</th><th>Expected</th><th>Actual</th><th></th>'
+        '</tr></thead>'
+        '<tbody>'
+    )
+    tfoot = '</tbody></table>'
+
+    fail_body = "".join(fail_rows)
+    if pass_rows:
+        pass_count = len(pass_rows)
+        s_plural = "s" if pass_count != 1 else ""
+        pass_body = (
+            f'<tr class="pass-collapse-row"><td colspan="4" style="padding:0">'
+            f'<details>'
+            f'<summary class="pass-summary">'
+            f'{pass_count} passing field{s_plural}</summary>'
+            f'<table class="table table-sm field-table-inner">'
+            f'<tbody>{"".join(pass_rows)}</tbody>'
+            f'</table>'
+            f'</details>'
+            f'</td></tr>'
+        )
+    else:
+        pass_body = ""
+
+    return thead + fail_body + pass_body + tfoot
+
+
 def _css_safe(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "-", str(name))
 
 
-def _field_row_class(score: float, status: str) -> str:
-    if status == "ignored":
-        return "table-secondary"
-    if score >= 1.0:
-        return "table-success"
-    if score <= 0.0:
-        return "table-danger"
-    return "table-warning"
-
-
 # ── Diff rendering ─────────────────────────────────────────────────────────────
-
-
-def _render_step_diff(
-    case_name: str, step_name: str, expected: Any, actual: Any
-) -> str:
-    """Render a clean side-by-side HTML diff of expected vs actual YAML."""
-    exp_str = yaml.dump(
-        expected, sort_keys=False, allow_unicode=True, default_flow_style=False,
-        Dumper=yaml.SafeDumper,
-    )
-    act_str = yaml.dump(
-        actual, sort_keys=False, allow_unicode=True, default_flow_style=False,
-        Dumper=yaml.SafeDumper,
-    )
-
-    exp_lines = exp_str.splitlines(keepends=True)
-    act_lines = act_str.splitlines(keepends=True)
-
-    safe_id = _css_safe(f"diff-{case_name}-{step_name}")
-
-    # Build unified diff first (used on mobile).
-    unified_html = _build_unified_diff(exp_lines, act_lines, step_name)
-
-    # Build side-by-side diff (used on desktop).
-    side_html = _build_side_by_side_diff(exp_lines, act_lines, step_name)
-
-    return (
-        f'<div class="diff-collapse mt-2" id="{safe_id}">'
-        f'<div class="diff-step-label">Step: <code>{_esc(step_name)}</code></div>'
-        f'<div class="diff-side">'
-        f'<div class="diff-header-row">'
-        f'<div class="diff-header">Expected</div>'
-        f'<div class="diff-header">Actual</div>'
-        f"</div>"
-        f'{side_html}'
-        f"</div>"
-        f'<div class="diff-unified">{unified_html}</div>'
-        f"</div>"
-    )
-
-
-def _build_side_by_side_diff(
-    exp_lines: list[str], act_lines: list[str], step_name: str
-) -> str:
-    """Build a side-by-side diff table (desktop)."""
-    differ = difflib.SequenceMatcher(None, exp_lines, act_lines)
-    rows: list[str] = []
-
-    for tag, i1, i2, j1, j2 in differ.get_opcodes():
-        if tag == "equal":
-            for k in range(i1, i2):
-                el = html.escape(exp_lines[k].rstrip("\n"))
-                al = html.escape(act_lines[k - i1 + j1].rstrip("\n"))
-                rows.append(
-                    f'<tr><td class="diff-ln">{k + 1}</td>'
-                    f'<td class="diff-cell diff-eq"><pre>{el}</pre></td>'
-                    f'<td class="diff-ln">{j1 + (k - i1) + 1}</td>'
-                    f'<td class="diff-cell diff-eq"><pre>{al}</pre></td></tr>'
-                )
-        elif tag == "replace":
-            # Pair up lines for side-by-side comparison.
-            max_len = max(i2 - i1, j2 - j1)
-            for k in range(max_len):
-                e_idx = i1 + k
-                a_idx = j1 + k
-                e_text = html.escape(exp_lines[e_idx].rstrip("\n")) if e_idx < i2 else ""
-                a_text = html.escape(act_lines[a_idx].rstrip("\n")) if a_idx < j2 else ""
-                e_ln = str(e_idx + 1) if e_idx < i2 else ""
-                a_ln = str(a_idx + 1) if a_idx < j2 else ""
-
-                # Word-level diff within the line.
-                if e_text and a_text:
-                    e_text, a_text = _word_diff_side_by_side(e_text, a_text)
-
-                e_cls = "diff-cell diff-del" if e_text else "diff-cell diff-empty"
-                a_cls = "diff-cell diff-add" if a_text else "diff-cell diff-empty"
-
-                rows.append(
-                    f'<tr><td class="diff-ln">{e_ln}</td>'
-                    f'<td class="{e_cls}"><pre>{e_text}</pre></td>'
-                    f'<td class="diff-ln">{a_ln}</td>'
-                    f'<td class="{a_cls}"><pre>{a_text}</pre></td></tr>'
-                )
-        elif tag == "delete":
-            for k in range(i1, i2):
-                el = html.escape(exp_lines[k].rstrip("\n"))
-                rows.append(
-                    f'<tr><td class="diff-ln">{k + 1}</td>'
-                    f'<td class="diff-cell diff-del"><pre>{el}</pre></td>'
-                    f'<td class="diff-ln"></td>'
-                    f'<td class="diff-cell diff-empty"></td></tr>'
-                )
-        elif tag == "insert":
-            for k in range(j1, j2):
-                al = html.escape(act_lines[k].rstrip("\n"))
-                rows.append(
-                    f'<tr><td class="diff-ln"></td>'
-                    f'<td class="diff-cell diff-empty"></td>'
-                    f'<td class="diff-ln">{k + 1}</td>'
-                    f'<td class="diff-cell diff-add"><pre>{al}</pre></td></tr>'
-                )
-
-    return f'<table class="diff-table"><tbody>{"".join(rows)}</tbody></table>'
-
-
-def _build_unified_diff(
-    exp_lines: list[str], act_lines: list[str], step_name: str
-) -> str:
-    """Build a unified diff (mobile)."""
-    a_lines = [line.rstrip("\n") for line in exp_lines]
-    b_lines = [line.rstrip("\n") for line in act_lines]
-    udiff = difflib.unified_diff(a_lines, b_lines, fromfile="Expected", tofile="Actual")
-    result: list[str] = []
-    for line in udiff:
-        escaped = html.escape(line)
-        if line.startswith("---") or line.startswith("+++"):
-            result.append(f'<span class="diff-hdr">{escaped}</span>')
-        elif line.startswith("@@"):
-            result.append(f'<span class="diff-hunk">{escaped}</span>')
-        elif line.startswith("-"):
-            result.append(f'<span class="diff-del">{escaped}</span>')
-        elif line.startswith("+"):
-            result.append(f'<span class="diff-add">{escaped}</span>')
-        else:
-            result.append(escaped)
-    return '<pre class="diff-unified-pre">' + "\n".join(result) + "</pre>"
-
-
-def _word_diff_side_by_side(e_text: str, a_text: str) -> tuple[str, str]:
-    """Return (expected_html, actual_html) with word-level highlights."""
-    # Use char-level SequenceMatcher to find changed spans within the line.
-    sm = difflib.SequenceMatcher(None, e_text, a_text)
-    e_parts: list[str] = []
-    a_parts: list[str] = []
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag == "equal":
-            e_parts.append(e_text[i1:i2])
-            a_parts.append(a_text[j1:j2])
-        elif tag == "replace":
-            e_parts.append(
-                f'<span class="wdiff-del">{e_text[i1:i2]}</span>'
-            )
-            a_parts.append(
-                f'<span class="wdiff-add">{a_text[j1:j2]}</span>'
-            )
-        elif tag == "delete":
-            e_parts.append(
-                f'<span class="wdiff-del">{e_text[i1:i2]}</span>'
-            )
-        elif tag == "insert":
-            a_parts.append(
-                f'<span class="wdiff-add">{a_text[j1:j2]}</span>'
-            )
-    return "".join(e_parts), "".join(a_parts)
+# Removed: _render_step_diff, _build_side_by_side_diff, _build_unified_diff,
+# _word_diff_side_by_side.  The structured field comparison table (_render_field_table)
+# supersedes the YAML text diff entirely.
 
 
 # ── PDF export ─────────────────────────────────────────────────────────────────
@@ -1180,115 +1129,72 @@ _HTML_SHELL = """\
     .delta-pos {{ color: var(--pass); font-weight: 600; font-family: var(--font-mono); font-size: 13px; }}
     .delta-neg {{ color: var(--fail); font-weight: 600; font-family: var(--font-mono); font-size: 13px; }}
 
-    /* ── Diff ── */
-    .diff-collapse {{
-      margin-top: 0.75rem;
-    }}
-
-    .diff-step-label {{
-      font-size: 12px;
-      color: var(--text-muted);
-      margin-bottom: 0.5rem;
-    }}
-
-    .diff-side {{
-      display: block;
-      overflow-x: auto;
-    }}
-
-    .diff-unified {{
-      display: none;
-    }}
-
-    .diff-header-row {{
-      display: flex;
-      background: #f9fafb;
-      border: 1px solid var(--border);
-      border-bottom: none;
-      border-radius: var(--radius) var(--radius) 0 0;
-    }}
-
-    .diff-header {{
-      flex: 1;
-      padding: 0.3rem 0.75rem;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--text-secondary);
-    }}
-
-    .diff-header:first-child {{
-      border-right: 1px solid var(--border);
-    }}
-
-    .diff-table {{
-      width: 100%;
-      border-collapse: collapse;
-      border: 1px solid var(--border);
-      border-radius: 0 0 var(--radius) var(--radius);
-      font-size: 12px;
-      font-family: var(--font-mono);
-    }}
-
-    .diff-ln {{
-      width: 2.5em;
-      padding: 0 0.4rem;
-      text-align: right;
-      color: var(--text-muted);
-      background: #f9fafb;
-      border-right: 1px solid var(--border-light);
-      font-size: 11px;
-      user-select: none;
-    }}
-
-    .diff-cell {{
-      padding: 0 0.5rem;
-      vertical-align: top;
-    }}
-
-    .diff-cell pre {{
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-all;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.5;
-    }}
-
-    .diff-eq {{ background: none; }}
-    .diff-add {{ background: #dcfce7; }}
-    .diff-del {{ background: #fee2e2; }}
-    .diff-empty {{ background: #f9fafb; }}
-
-    .diff-unified-pre {{
-      margin: 0;
-      padding: 0.75rem;
-      background: #f9fafb;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.5;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }}
-
-    .diff-hdr {{ color: var(--accent); font-weight: 600; }}
-    .diff-hunk {{ color: var(--accent); }}
-
-    /* Word-level diff highlights */
-    .wdiff-add {{ background: #86efac; border-radius: 2px; padding: 0 1px; }}
-    .wdiff-del {{ background: #fca5a5; border-radius: 2px; padding: 0 1px; }}
-
     /* ── Field rows ── */
     .field-detail td {{ padding: 0; }}
 
     .field-row.field-pass {{ background: var(--pass-bg); }}
     .field-row.field-warn {{ background: var(--warn-bg); }}
     .field-row.field-fail {{ background: var(--fail-bg); }}
-    .field-row.field-ignored {{ background: var(--border-light); }}
+    .field-row.field-ignored {{ background: var(--border-light); color: var(--text-muted); }}
+
+    .field-table {{ margin: 0.5rem 0; }}
+    .field-table-inner {{ margin: 0; }}
+    .field-path {{ font-size: 11px; }}
+    .val-cell {{ font-family: var(--font-mono); font-size: 12px; max-width: 320px; word-break: break-word; }}
+    .icon-cell {{ width: 28px; text-align: center; }}
+    .icon-pass {{ color: var(--pass); font-weight: 700; }}
+    .icon-fail {{ color: var(--fail); font-weight: 700; }}
+    .icon-warn {{ color: var(--warn); font-weight: 700; }}
+    .icon-ignored {{ color: var(--text-muted); }}
+    .mono-cell {{ font-size: 12px; }}
+
+    /* ── Step section (steps with full field detail) ── */
+    .step-section {{ margin-top: 0.75rem; }}
+    .step-section-header {{
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border-light);
+      margin-bottom: 0.25rem;
+    }}
+    .step-section-score {{ margin-left: auto; }}
+
+    /* ── Pass-collapse (passing fields hidden behind <details>) ── */
+    .pass-collapse-row td {{ padding: 0 !important; border-top: 1px solid var(--border-light); }}
+    .pass-summary {{
+      cursor: pointer;
+      padding: 0.3rem 0.75rem;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: var(--border-light);
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }}
+    .pass-summary::-webkit-details-marker {{ display: none; }}
+    .pass-summary::before {{ content: "▶"; font-size: 10px; }}
+    details[open] .pass-summary::before {{ content: "▼"; }}
+
+    /* ── Value expand toggle ── */
+    .val-short {{ display: inline; }}
+    .val-full {{ display: none; }}
+    .val-short.val-expanded .val-short-text {{ display: none; }}
+    .val-short.val-expanded .val-full {{ display: inline; }}
+    .val-expand {{
+      background: none;
+      border: none;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 0 2px;
+      font-family: var(--font-mono);
+    }}
+    .val-expand:hover {{ text-decoration: underline; }}
 
     /* ── Mermaid ── */
     .mermaid {{
@@ -1352,14 +1258,6 @@ _HTML_SHELL = """\
       padding-top: 0;
     }}
 
-    /* ── Diff heading ── */
-    .diff-heading {{
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      margin: 0.75rem 0 0.5rem;
-    }}
-
     /* ── Utilities ── */
     .muted {{ color: var(--text-muted); }}
     .small {{ font-size: 12px; }}
@@ -1406,19 +1304,6 @@ _HTML_SHELL = """\
         align-items: flex-start;
       }}
 
-      .diff-side {{
-        display: none;
-      }}
-
-      .diff-unified {{
-        display: block;
-      }}
-    }}
-
-    @media (min-width: 769px) {{
-      .diff-unified {{
-        display: none;
-      }}
     }}
 
     /* ── Print ── */
@@ -1459,13 +1344,6 @@ _HTML_SHELL = """\
         padding: 0;
       }}
 
-      .diff-unified {{
-        display: block;
-      }}
-
-      .diff-side {{
-        display: none;
-      }}
     }}
   </style>
 </head>

@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.10.1] — 2026-05-15
+
+### Changed
+
+- **Field comparison table replaces text diff** — the side-by-side and unified text diff views in the benchmark HTML report have been replaced with a structured field comparison table. Each row shows a field path, expected value, actual value, and a pass/fail/partial icon. Passing fields collapse into a `<details>` summary so failures are immediately visible without scrolling.
+- **`_reorder_to_expected` normalization** — actual output dicts are reordered to match the expected key order before display, so corresponding fields always line up visually.
+- **Expand-on-demand for long values** — values longer than 120 characters are truncated with a `[+]` inline expand button; the full value is revealed without a page jump.
+- **Removed `difflib` dependency** — `import difflib` and `import html` removed from `report.py`; all diff-related helpers (`_render_step_diff`, `_build_side_by_side_diff`, `_build_unified_diff`, `_word_diff_side_by_side`) deleted.
+
+### Tests
+
+- Added `tests/test_report.py` with 42 tests covering `_reorder_to_expected`, `_fmt_value`, `_match_icon`, `_render_field_table`, and end-to-end report generation.
+
 ## [1.10.0] — 2026-05-14
 
 ### Changed

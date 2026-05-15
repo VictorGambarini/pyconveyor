@@ -928,28 +928,25 @@ class TestReportHelpers:
 
         assert _css_safe("abc123_-") == "abc123_-"
 
-    def test_field_row_class_scored(self):
-        from pyconveyor.report import _field_row_class
+    def test_match_icon_pass(self):
+        from pyconveyor.report import _match_icon
 
-        assert _field_row_class(1.0, "scored") == "table-success"
-        assert _field_row_class(0.0, "scored") == "table-danger"
-        assert _field_row_class(0.5, "scored") == "table-warning"
-        assert _field_row_class(0.0, "ignored") == "table-secondary"
+        assert "✓" in _match_icon(1.0, "scored")
+        assert "✗" in _match_icon(0.0, "scored")
+        assert "~" in _match_icon(0.5, "scored")
+        assert "—" in _match_icon(0.0, "ignored")
 
-    def test_render_step_diff_contains_expected_elements(self):
-        from pyconveyor.report import _render_step_diff
+    def test_fmt_value_none(self):
+        from pyconveyor.report import _fmt_value
 
-        html = _render_step_diff(
-            "case1", "greet",
-            {"message": "Bonjour!", "language": "French"},
-            {"message": "Hello!", "language": "French"},
-        )
-        assert 'id="diff-case1-greet"' in html
-        assert "Bonjour" in html
-        assert "Hello" in html
-        assert "diff-table" in html
-        assert "Expected" in html
-        assert "Actual" in html
+        assert "—" in _fmt_value(None)
+
+    def test_render_field_table_single_score_returns_empty(self):
+        from pyconveyor.report import _render_field_table
+        from pyconveyor.benchmark import FieldScore, StepScore
+
+        ss = StepScore("greet", 1.0, "scored", [FieldScore("greet.msg", "hi", "hi", 1.0)])
+        assert _render_field_table("greet", ss) == ""
 
     def test_report_contains_css_safe_ids(self, tmp_path: Path):
         from pyconveyor.benchmark import BenchmarkRunner
@@ -965,7 +962,7 @@ class TestReportHelpers:
         # IDs should use css-safe versions — no dots in id attributes
         assert 'id="case-0-case_greeting' in html
 
-    def test_report_contains_diff_section(self, tmp_path: Path):
+    def test_report_contains_field_section(self, tmp_path: Path):
         from pyconveyor.benchmark import BenchmarkRunner
         from pyconveyor.report import generate_report
 
@@ -976,7 +973,7 @@ class TestReportHelpers:
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "diff-collapse" in html
+        assert "step-section" in html
 
 
 # ── CaseResult actuals/expecteds ────────────────────────────────────────────────
