@@ -6,12 +6,22 @@ and end-to-end generate_report with field comparison view.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-import pytest
-
-from pyconveyor.benchmark import BenchmarkRunner, BenchmarkSummary, FieldScore, StepScore, CaseResult, PipelineBenchmarkResult
-from pyconveyor.report import generate_report, _reorder_to_expected, _fmt_value, _match_icon, _render_field_table
+from pyconveyor.benchmark import (
+    BenchmarkRunner,
+    BenchmarkSummary,
+    CaseResult,
+    FieldScore,
+    PipelineBenchmarkResult,
+    StepScore,
+)
+from pyconveyor.report import (
+    _fmt_value,
+    _match_icon,
+    _render_field_table,
+    _reorder_to_expected,
+    generate_report,
+)
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 

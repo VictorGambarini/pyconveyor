@@ -942,8 +942,8 @@ class TestReportHelpers:
         assert "—" in _fmt_value(None)
 
     def test_render_field_table_single_score_returns_empty(self):
-        from pyconveyor.report import _render_field_table
         from pyconveyor.benchmark import FieldScore, StepScore
+        from pyconveyor.report import _render_field_table
 
         ss = StepScore("greet", 1.0, "scored", [FieldScore("greet.msg", "hi", "hi", 1.0)])
         assert _render_field_table("greet", ss) == ""
