@@ -4,6 +4,7 @@ via ESM import which does not support SRI)."""
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from datetime import datetime, timezone
@@ -415,7 +416,12 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
         ss = c.step_scores.get(step_name)
         if ss is None:
             continue
-        field_table = _render_field_table(step_name, ss)
+        field_table = _render_field_table(
+                step_name,
+                ss,
+                step_expected=c.expecteds.get(step_name),
+                step_actual=c.actuals.get(step_name),
+            )
         detail_sections.append(
             f'<div class="step-section">'
             f'<div class="step-section-header">'
@@ -427,6 +433,23 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
         )
 
     detail_content = "\n".join(detail_sections)
+
+    # ── Unchecked steps hint ──────────────────────────────────────────────────
+    # Show steps the pipeline produced but that are not in expected.yaml, so
+    # users know which step names they can add to benchmark additional stages.
+    unchecked = sorted(k for k in c.actuals if k not in c.step_scores)
+    unchecked_hint = ""
+    if unchecked:
+        names_html = " ".join(
+            f'<code class="unchecked-step">{_esc(n)}</code>' for n in unchecked
+        )
+        unchecked_hint = (
+            f'<div class="unchecked-steps">'
+            f'<span class="unchecked-label">Also benchmarkable:</span> '
+            f'{names_html}'
+            f'<span class="unchecked-note"> — add these keys to <code>expected.yaml</code></span>'
+            f'</div>'
+        )
 
     error_section = ""
     if c.error:
@@ -453,6 +476,7 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
         f'{error_section}'
         f'{simple_table}'
         f'{detail_content}'
+        f'{unchecked_hint}'
         f"</div></div>"
     )
 
@@ -705,15 +729,99 @@ def _match_icon(score: float, status: str) -> str:
     return '<span aria-label="partial" class="icon-warn">~</span>'
 
 
-def _render_field_table(step_name: str, ss: Any) -> str:
-    """Render a structured field comparison table for a step with multiple FieldScores.
+def _yaml_block(val: Any) -> str:
+    """Serialise *val* as a YAML block-style string (no flow, no truncation)."""
+    if val is None:
+        return "null\n"
+    if isinstance(val, (dict, list)):
+        return yaml.dump(
+            val,
+            default_flow_style=False,
+            allow_unicode=True,
+            Dumper=yaml.SafeDumper,
+        )
+    return str(val) + "\n"
 
-    Failing fields are surfaced first (always visible).  Passing and ignored
-    fields are wrapped in a ``<details>`` collapse to reduce visual noise.
+
+def _render_yaml_diff(expected: Any, actual: Any) -> str:
+    """Return an HTML fragment showing a unified diff of expected vs actual YAML.
+
+    Both values are formatted as YAML block strings (key-order normalised so
+    that structural differences are not hidden behind ordering noise).  Diff
+    lines are coloured:
+
+    * ``-`` (in expected, missing from actual) → red
+    * ``+`` (in actual, not in expected) → green
+    * ``@@`` hunk headers → blue
+    * context lines → unchanged
+    """
+    ordered_actual = _reorder_to_expected(actual, expected)
+    exp_lines = _yaml_block(expected).splitlines(keepends=True)
+    act_lines = _yaml_block(ordered_actual).splitlines(keepends=True)
+
+    diff = list(
+        difflib.unified_diff(exp_lines, act_lines, fromfile="expected", tofile="actual", n=3)
+    )
+
+    if not diff:
+        # Perfect match — show the YAML without any diff markup
+        block = _esc("".join(exp_lines))
+        return (
+            f'<div class="yaml-diff yaml-diff-match">'
+            f'<pre class="yaml-pre">{block}</pre>'
+            f'</div>'
+        )
+
+    html_lines: list[str] = []
+    for raw in diff:
+        line = raw.rstrip("\n")
+        if line.startswith("---") or line.startswith("+++"):
+            html_lines.append(
+                f'<div class="diff-line diff-header">{_esc(line)}</div>'
+            )
+        elif line.startswith("@@"):
+            html_lines.append(
+                f'<div class="diff-line diff-hunk">{_esc(line)}</div>'
+            )
+        elif line.startswith("-"):
+            html_lines.append(
+                f'<div class="diff-line diff-del">{_esc(line)}</div>'
+            )
+        elif line.startswith("+"):
+            html_lines.append(
+                f'<div class="diff-line diff-add">{_esc(line)}</div>'
+            )
+        else:
+            html_lines.append(
+                f'<div class="diff-line diff-ctx">{_esc(line)}</div>'
+            )
+
+    inner = "".join(html_lines)
+    return f'<div class="yaml-diff"><pre class="yaml-pre">{inner}</pre></div>'
+
+
+def _render_field_table(
+    step_name: str,
+    ss: Any,
+    step_expected: Any = None,
+    step_actual: Any = None,
+) -> str:
+    """Render a step's comparison view.
+
+    When *step_expected* and *step_actual* are supplied the primary view is a
+    YAML unified diff of the full step output, followed by a collapsible
+    per-field score breakdown.  Without those arguments the function falls back
+    to the plain field-score table (backward-compatible).
     """
     if not ss.field_scores or len(ss.field_scores) <= 1:
         return ""
 
+    # ── YAML diff (primary view) ───────────────────────────────────────────
+    yaml_diff_html = ""
+    if step_expected is not None and step_actual is not None:
+        yaml_diff_html = _render_yaml_diff(step_expected, step_actual)
+
+    # ── Per-field score table ──────────────────────────────────────────────
     fail_rows: list[str] = []
     pass_rows: list[str] = []
 
@@ -731,8 +839,6 @@ def _render_field_table(step_name: str, ss: Any) -> str:
         row = (
             f'<tr class="{row_cls}">'
             f'<td><code class="field-path">{_esc(f.field)}</code></td>'
-            f'<td class="val-cell">{_fmt_value(f.expected)}</td>'
-            f'<td class="val-cell">{_fmt_value(f.actual)}</td>'
             f'<td class="icon-cell">{_match_icon(f.score, f.status)}</td>'
             f'</tr>'
         )
@@ -741,6 +847,31 @@ def _render_field_table(step_name: str, ss: Any) -> str:
         else:
             pass_rows.append(row)
 
+    fail_count = len(fail_rows)
+    pass_count = len(pass_rows)
+    total = fail_count + pass_count
+
+    if yaml_diff_html:
+        # With diff view: field table is a compact summary in <details>
+        fail_body = "".join(fail_rows)
+        all_rows = fail_body + "".join(pass_rows)
+        summary_label = (
+            f"{pass_count}/{total} fields match"
+            if fail_count
+            else f"all {total} fields match"
+        )
+        field_summary = (
+            f'<details class="field-score-details">'
+            f'<summary class="field-score-summary">{summary_label}</summary>'
+            f'<table class="table table-sm field-table">'
+            f'<thead><tr><th>Field</th><th></th></tr></thead>'
+            f'<tbody>{all_rows}</tbody>'
+            f'</table>'
+            f'</details>'
+        )
+        return yaml_diff_html + field_summary
+
+    # Fallback: standalone field score table (no diff available)
     thead = (
         '<table class="table table-sm field-table">'
         '<thead><tr>'
@@ -750,25 +881,44 @@ def _render_field_table(step_name: str, ss: Any) -> str:
     )
     tfoot = '</tbody></table>'
 
-    fail_body = "".join(fail_rows)
-    if pass_rows:
-        pass_count = len(pass_rows)
-        s_plural = "s" if pass_count != 1 else ""
-        pass_body = (
+    full_rows: list[str] = []
+    for f in ss.field_scores:
+        if f.status == "ignored":
+            row_cls = "field-row field-ignored"
+        elif f.score >= 1.0:
+            row_cls = "field-row field-pass"
+        elif f.score <= 0.0:
+            row_cls = "field-row field-fail"
+        else:
+            row_cls = "field-row field-warn"
+        full_rows.append(
+            f'<tr class="{row_cls}">'
+            f'<td><code class="field-path">{_esc(f.field)}</code></td>'
+            f'<td class="val-cell">{_fmt_value(f.expected)}</td>'
+            f'<td class="val-cell">{_fmt_value(f.actual)}</td>'
+            f'<td class="icon-cell">{_match_icon(f.score, f.status)}</td>'
+            f'</tr>'
+        )
+
+    fail_body_full = "".join(r for r in full_rows if "field-fail" in r or "field-warn" in r)
+    pass_rows_full = [r for r in full_rows if "field-pass" in r or "field-ignored" in r]
+
+    pass_html = ""
+    if pass_rows_full:
+        s_plural = "s" if len(pass_rows_full) != 1 else ""
+        pass_html = (
             f'<tr class="pass-collapse-row"><td colspan="4" style="padding:0">'
             f'<details>'
             f'<summary class="pass-summary">'
-            f'{pass_count} passing field{s_plural}</summary>'
+            f'{len(pass_rows_full)} passing field{s_plural}</summary>'
             f'<table class="table table-sm field-table-inner">'
-            f'<tbody>{"".join(pass_rows)}</tbody>'
+            f'<tbody>{"".join(pass_rows_full)}</tbody>'
             f'</table>'
             f'</details>'
             f'</td></tr>'
         )
-    else:
-        pass_body = ""
 
-    return thead + fail_body + pass_body + tfoot
+    return thead + fail_body_full + pass_html + tfoot
 
 
 def _css_safe(name: str) -> str:
@@ -1147,6 +1297,57 @@ _HTML_SHELL = """\
     .icon-warn {{ color: var(--warn); font-weight: 700; }}
     .icon-ignored {{ color: var(--text-muted); }}
     .mono-cell {{ font-size: 12px; }}
+
+    /* ── YAML diff view ── */
+    .yaml-diff {{
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin: 6px 0 4px;
+      background: var(--surface);
+    }}
+    .yaml-diff-match {{ background: rgba(34,197,94,0.04); border-color: var(--pass); }}
+    .yaml-pre {{ margin: 0; padding: 4px 0; font-size: 12px; font-family: var(--font-mono); line-height: 1.45; }}
+    .diff-line {{ display: block; padding: 0 12px; white-space: pre; }}
+    .diff-header {{ color: var(--text-muted); font-style: italic; }}
+    .diff-hunk {{ color: #3b82f6; background: rgba(59,130,246,0.06); }}
+    .diff-del {{ background: rgba(239,68,68,0.12); color: #b91c1c; }}
+    .diff-add {{ background: rgba(34,197,94,0.12); color: #15803d; }}
+    .diff-ctx {{ color: var(--fg); }}
+
+    /* ── Field-score summary (collapsible below YAML diff) ── */
+    .field-score-details {{ margin-top: 2px; }}
+    .field-score-summary {{
+      cursor: pointer;
+      padding: 0.25rem 0.6rem;
+      font-size: 11px;
+      color: var(--text-muted);
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }}
+    .field-score-summary::-webkit-details-marker {{ display: none; }}
+    .field-score-summary::before {{ content: "▶"; font-size: 9px; }}
+    details[open] .field-score-summary::before {{ content: "▼"; }}
+
+    /* ── Unchecked steps hint ── */
+    .unchecked-steps {{
+      margin-top: 0.6rem;
+      padding: 0.3rem 0.6rem;
+      border: 1px dashed var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }}
+    .unchecked-label {{ font-weight: 600; }}
+    .unchecked-step {{
+      background: var(--border-light);
+      border-radius: 3px;
+      padding: 0 3px;
+      font-size: 11px;
+    }}
+    .unchecked-note {{ color: var(--text-muted); }}
 
     /* ── Step section (steps with full field detail) ── */
     .step-section {{ margin-top: 0.75rem; }}

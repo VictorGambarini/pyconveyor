@@ -285,8 +285,16 @@ class BenchmarkRunner:
 
         expected: dict[str, Any] = case["expected"]
         step_scores: dict[str, StepScore] = {}
-        actuals: dict[str, Any] = {}
         expecteds: dict[str, Any] = dict(expected)
+
+        # Capture ALL step outputs — not just those in expected — so the
+        # report can surface which additional steps are available to benchmark.
+        actuals: dict[str, Any] = {}
+        for sname, sr in rctx.steps.items():
+            val = sr.value
+            if hasattr(val, "model_dump"):
+                val = val.model_dump()
+            actuals[sname] = val
 
         for step_name, expected_value in expected.items():
             sr = rctx.steps.get(step_name)
@@ -304,10 +312,6 @@ class BenchmarkRunner:
                 status=status,
                 field_scores=fscores,
             )
-            act = sr.value
-            if hasattr(act, "model_dump"):
-                act = act.model_dump()
-            actuals[step_name] = act
 
         scored = [s.score for s in step_scores.values() if s.status == "scored"]
         overall = sum(scored) / len(scored) if scored else 0.0

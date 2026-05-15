@@ -1,7 +1,8 @@
 """Tests for report.py helper functions and HTML output.
 
 Covers: _reorder_to_expected, _fmt_value, _match_icon, _render_field_table,
-and end-to-end generate_report with field comparison view.
+_yaml_block, _render_yaml_diff, and end-to-end generate_report with field
+comparison view.
 """
 from __future__ import annotations
 
@@ -19,7 +20,9 @@ from pyconveyor.report import (
     _fmt_value,
     _match_icon,
     _render_field_table,
+    _render_yaml_diff,
     _reorder_to_expected,
+    _yaml_block,
     generate_report,
 )
 
@@ -335,14 +338,13 @@ class TestReportFieldComparison:
         html = out.read_text(encoding="utf-8")
         assert "step-section" in html
 
-    def test_expected_column_before_actual(self, tmp_path: Path):
+    def test_yaml_diff_present(self, tmp_path: Path):
+        """Steps with multiple FieldScores use the YAML diff view."""
         s = self._summary_with_fields()
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        expected_pos = html.index(">Expected<")
-        actual_pos = html.index(">Actual<")
-        assert expected_pos < actual_pos
+        assert "yaml-diff" in html
 
     def test_no_diff_section_in_output(self, tmp_path: Path):
         """Regression: YAML text diff should be gone from the report."""
@@ -374,13 +376,14 @@ class TestReportFieldComparison:
         assert 'aria-label="pass"' in html
         assert 'aria-label="fail"' in html
 
-    def test_pass_collapse_present(self, tmp_path: Path):
+    def test_field_score_summary_present(self, tmp_path: Path):
+        """The field-score summary <details> element is present below the YAML diff."""
         s = self._summary_with_fields()
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "pass-summary" in html
-        assert "<details>" in html
+        assert "field-score-summary" in html
+        assert "<details" in html
 
     def test_single_field_score_no_field_table(self, tmp_path: Path):
         """Steps with only one FieldScore use the compact step table, not the field table."""
@@ -404,3 +407,135 @@ class TestReportFieldComparison:
         assert "{'message':" not in html
         # Should have YAML inline or plain monospace code
         assert "<code" in html
+
+    def test_unchecked_steps_shown(self, tmp_path: Path):
+        """Steps present in actuals but not in step_scores are shown as 'also benchmarkable'."""
+        fs = [
+            FieldScore("greet.message", "hello", "hello", 1.0),
+            FieldScore("greet.language", "en", "en", 1.0),
+        ]
+        ss = StepScore(step_name="greet", score=1.0, status="scored", field_scores=fs)
+        case = CaseResult(
+            case_name="test_case",
+            pipeline_path="test.yaml",
+            status="ok",
+            step_scores={"greet": ss},
+            overall_score=1.0,
+            error=None,
+            elapsed_seconds=0.1,
+            actuals={
+                "greet": {"message": "hello", "language": "en"},
+                "preprocess": {"text": "raw"},  # not in step_scores
+                "postprocess": {"out": "done"},  # not in step_scores
+            },
+            expecteds={"greet": {"message": "hello", "language": "en"}},
+        )
+        pr = PipelineBenchmarkResult(
+            pipeline_path="test.yaml",
+            cases=[case],
+            step_mean_accuracy={"greet": 1.0},
+            step_pass_rate={"greet": 1.0},
+            overall_mean_accuracy=1.0,
+            overall_pass_rate=1.0,
+        )
+        s = BenchmarkSummary(pipelines=[pr], case_names=["test_case"], pass_threshold=0.8)
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        html = out.read_text(encoding="utf-8")
+        assert "unchecked-steps" in html
+        assert "preprocess" in html
+        assert "postprocess" in html
+        assert "expected.yaml" in html
+
+
+# ── _yaml_block ───────────────────────────────────────────────────────────────
+
+
+class TestYamlBlock:
+    def test_none_returns_null(self):
+        result = _yaml_block(None)
+        assert result.strip() == "null"
+
+    def test_scalar_string(self):
+        result = _yaml_block("hello")
+        assert "hello" in result
+
+    def test_dict_block_style(self):
+        result = _yaml_block({"a": 1, "b": 2})
+        # Block style means newlines, not {a: 1, b: 2} on one line
+        assert "\n" in result
+        assert "a:" in result
+        assert "b:" in result
+
+    def test_list_block_style(self):
+        result = _yaml_block([{"x": 1}, {"x": 2}])
+        assert "- x:" in result
+
+    def test_no_flow_style(self):
+        val = {"key": [1, 2, 3]}
+        result = _yaml_block(val)
+        # Block style: items on separate lines, no {key: [1, 2, 3]}
+        assert "{" not in result
+
+
+# ── _render_yaml_diff ─────────────────────────────────────────────────────────
+
+
+class TestRenderYamlDiff:
+    def test_identical_values_no_diff_lines(self):
+        val = {"a": 1, "b": 2}
+        result = _render_yaml_diff(val, val)
+        assert "yaml-diff-match" in result
+        assert "diff-del" not in result
+        assert "diff-add" not in result
+
+    def test_different_values_show_diff_lines(self):
+        expected = {"message": "hello"}
+        actual = {"message": "world"}
+        result = _render_yaml_diff(expected, actual)
+        assert "diff-del" in result
+        assert "diff-add" in result
+        assert "yaml-diff-match" not in result
+
+    def test_del_line_contains_expected_value(self):
+        result = _render_yaml_diff({"x": "foo"}, {"x": "bar"})
+        # The '-' line should show the expected value 'foo'
+        assert "foo" in result
+
+    def test_add_line_contains_actual_value(self):
+        result = _render_yaml_diff({"x": "foo"}, {"x": "bar"})
+        # The '+' line should show the actual value 'bar'
+        assert "bar" in result
+
+    def test_html_escaped(self):
+        result = _render_yaml_diff({"k": "<script>"}, {"k": "<safe>"})
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+
+    def test_field_table_with_step_args_shows_yaml_diff(self):
+        """_render_field_table shows YAML diff when step_expected/actual provided."""
+        fs = [
+            FieldScore("greet.msg", "hi", "hello", 0.0),
+            FieldScore("greet.lang", "en", "en", 1.0),
+        ]
+        ss = StepScore(step_name="greet", score=0.5, status="scored", field_scores=fs)
+        result = _render_field_table(
+            "greet",
+            ss,
+            step_expected={"msg": "hello", "lang": "en"},
+            step_actual={"msg": "hi", "lang": "en"},
+        )
+        assert "yaml-diff" in result
+        assert "field-score-summary" in result
+
+    def test_field_table_without_step_args_uses_fallback(self):
+        """_render_field_table without step_expected/actual falls back to plain field table."""
+        fs = [
+            FieldScore("greet.msg", "hi", "hello", 0.0),
+            FieldScore("greet.lang", "en", "en", 1.0),
+        ]
+        ss = StepScore(step_name="greet", score=0.5, status="scored", field_scores=fs)
+        result = _render_field_table("greet", ss)
+        assert "yaml-diff" not in result
+        assert "Expected" in result  # fallback table has Expected column
+
