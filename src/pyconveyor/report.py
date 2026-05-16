@@ -1189,14 +1189,28 @@ _HTML_SHELL = """\
     .comp-row-close  {{ background: rgba(251,191,36,0.08); }}
     .comp-row-fail   {{ background: rgba(239,68,68,0.08); }}
     .comp-row-left   {{ background: rgba(249,115,22,0.07); }}
-    .comp-row-right  {{ background: rgba(59,130,246,0.07); }}
+    .comp-row-right   {{ background: rgba(59,130,246,0.07); }}
+    .comp-row-ignored {{ background: var(--surface); color: var(--text-muted); }}
+
+    /* Group separator / header rows */
+    .comp-group-sep {{ height: 4px; background: transparent; }}
+    .comp-group-header {{ background: var(--bg); border-top: 2px solid var(--border); }}
+    .comp-group-label {{
+      padding: 4px 8px 3px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
 
     /* Status icon colours */
-    .comp-icon-match {{ color: var(--pass); }}
-    .comp-icon-close {{ color: var(--warn); }}
-    .comp-icon-fail  {{ color: var(--fail); }}
-    .comp-icon-left  {{ color: #f97316; }}
-    .comp-icon-right {{ color: #3b82f6; }}
+    .comp-icon-match   {{ color: var(--pass); }}
+    .comp-icon-close   {{ color: var(--warn); }}
+    .comp-icon-fail    {{ color: var(--fail); }}
+    .comp-icon-left    {{ color: #f97316; }}
+    .comp-icon-right   {{ color: #3b82f6; }}
+    .comp-icon-ignored {{ color: var(--text-muted); }}
 
     /* Long value expand */
     .comp-val-short  {{ display: inline; }}
@@ -1405,7 +1419,15 @@ _HTML_SHELL = """\
       + '</span>';
   }}
 
+  function compGroup(path) {{
+    // Extract top-level group from path: e.g. entries[0].name → entries[0]
+    var m = path.match(/^([^.]+(?:\\[\\d+\\])?)/);
+    return m ? m[1] : path;
+  }}
+
   function compCompare(a, b) {{
+    // $ignore sentinel: field is explicitly excluded from scoring
+    if (a === '$ignore' || b === '$ignore') return 'ignored';
     if (a === undefined) return 'right';
     if (b === undefined) return 'left';
     if (a === b) return 'match';
@@ -1419,11 +1441,12 @@ _HTML_SHELL = """\
 
   function compStatusIcon(status) {{
     var map = {{
-      match: ['comp-icon-match', '✓ match'],
-      close: ['comp-icon-close', '~ close'],
-      fail:  ['comp-icon-fail',  '✗ fail'],
-      left:  ['comp-icon-left',  '← left only'],
-      right: ['comp-icon-right', '→ right only'],
+      match:   ['comp-icon-match',   '✓ match'],
+      close:   ['comp-icon-close',   '~ close'],
+      fail:    ['comp-icon-fail',    '✗ fail'],
+      left:    ['comp-icon-left',    '← left only'],
+      right:   ['comp-icon-right',   '→ right only'],
+      ignored: ['comp-icon-ignored', '— ignored'],
     }};
     var pair = map[status] || ['', status];
     return '<span class="' + pair[0] + '">' + escHtml(pair[1]) + '</span>';
@@ -1431,7 +1454,8 @@ _HTML_SHELL = """\
 
   function compRowClass(status) {{
     return {{ match:'comp-row-match', close:'comp-row-close', fail:'comp-row-fail',
-              left:'comp-row-left', right:'comp-row-right' }}[status] || '';
+              left:'comp-row-left', right:'comp-row-right',
+              ignored:'comp-row-ignored' }}[status] || '';
   }}
 
   function compRender(cid, leftKey, rightKey) {{
@@ -1462,7 +1486,7 @@ _HTML_SHELL = """\
 
     // Filter
     if (filter === 'diff') {{
-      rows = rows.filter(function(r) {{ return r.status !== 'match'; }});
+      rows = rows.filter(function(r) {{ return r.status !== 'match' && r.status !== 'ignored'; }});
     }} else if (filter === 'fail') {{
       rows = rows.filter(function(r) {{ return r.status === 'fail' || r.status === 'left' || r.status === 'right'; }});
     }}
@@ -1483,14 +1507,36 @@ _HTML_SHELL = """\
       }});
     }}
 
-    var html = rows.map(function(r) {{
-      return '<tr class="' + compRowClass(r.status) + '">'
+    // Build HTML rows, inserting group-separator headers between list-index groups
+    // Only when sorting by field (col 0) or default (no sort), so groups are contiguous
+    var addGroupHeaders = (sortCol === -1 || sortCol === 0);
+    var lastGroup = null;
+    var htmlParts = [];
+    rows.forEach(function(r) {{
+      if (addGroupHeaders) {{
+        var grp = compGroup(r.path);
+        if (grp !== lastGroup) {{
+          if (lastGroup !== null) {{
+            htmlParts.push('<tr class="comp-group-sep"><td colspan="4"></td></tr>');
+          }}
+          htmlParts.push(
+            '<tr class="comp-group-header">'
+            + '<td colspan="4" class="comp-group-label"><code>' + escHtml(grp) + '</code></td>'
+            + '</tr>'
+          );
+          lastGroup = grp;
+        }}
+      }}
+      htmlParts.push(
+        '<tr class="' + compRowClass(r.status) + '">'
         + '<td class="comp-td col-field"><code>' + escHtml(r.path) + '</code></td>'
         + '<td class="comp-td col-left">'  + compFmt(r.left)  + '</td>'
         + '<td class="comp-td col-right">' + compFmt(r.right) + '</td>'
         + '<td class="comp-td col-status">' + compStatusIcon(r.status) + '</td>'
-        + '</tr>';
-    }}).join('');
+        + '</tr>'
+      );
+    }});
+    var html = htmlParts.join('');
 
     var tbody = document.getElementById('comp-tbody-' + cid);
     if (tbody) tbody.innerHTML = html || '<tr><td colspan="4" style="padding:0.5rem;color:var(--text-muted)">No fields to display.</td></tr>';
@@ -1556,7 +1602,12 @@ _HTML_SHELL = """\
   crossorigin="anonymous"></script>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
+  mermaid.initialize({{ startOnLoad: false, theme: 'default' }});
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', function() {{ mermaid.run(); }});
+  }} else {{
+    mermaid.run();
+  }}
 </script>
 <script>
 {chart_js}
