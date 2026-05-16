@@ -1400,7 +1400,7 @@ _HTML_SHELL = """\
     var full  = escHtml(s);
     return '<span class="comp-val-short">'
       + '<code class="comp-val-text">' + short + '…</code>'
-      + '<button class="comp-val-btn" onclick="this.closest(\'.comp-val-short\').classList.toggle(\'expanded\')">[+]</button>'
+      + '<button class="comp-val-btn" onclick="this.closest(\\'.comp-val-short\\').classList.toggle(\\'expanded\\')">[+]</button>'
       + '<code class="comp-val-full" hidden>' + full + '</code>'
       + '</span>';
   }}
