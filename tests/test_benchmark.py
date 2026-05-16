@@ -928,25 +928,32 @@ class TestReportHelpers:
 
         assert _css_safe("abc123_-") == "abc123_-"
 
-    def test_match_icon_pass(self):
-        from pyconveyor.report import _match_icon
+    def test_flatten_leaves_basic(self):
+        from pyconveyor.report import _flatten_leaves
 
-        assert "✓" in _match_icon(1.0, "scored")
-        assert "✗" in _match_icon(0.0, "scored")
-        assert "~" in _match_icon(0.5, "scored")
-        assert "—" in _match_icon(0.0, "ignored")
+        result = _flatten_leaves({"a": 1, "b": {"c": 2}})
+        assert ("a", 1) in result
+        assert ("b.c", 2) in result
 
-    def test_fmt_value_none(self):
-        from pyconveyor.report import _fmt_value
+    def test_to_serialisable_primitives(self):
+        from pyconveyor.report import _to_serialisable
 
-        assert "—" in _fmt_value(None)
+        assert _to_serialisable(None) is None
+        assert _to_serialisable(42) == 42
+        assert _to_serialisable("hello") == "hello"
 
-    def test_render_field_table_single_score_returns_empty(self):
-        from pyconveyor.benchmark import FieldScore, StepScore
-        from pyconveyor.report import _render_field_table
+    def test_report_contains_comp_block(self, tmp_path: Path):
+        from pyconveyor.benchmark import BenchmarkRunner
+        from pyconveyor.report import generate_report
 
-        ss = StepScore("greet", 1.0, "scored", [FieldScore("greet.msg", "hi", "hi", 1.0)])
-        assert _render_field_table("greet", ss) == ""
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        benchmarks = Path(__file__).parent / "fixtures" / "benchmarks"
+        runner = BenchmarkRunner(benchmarks, pipelines=[pipelines / "hello.yaml"])
+        s = runner.run()
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        html = out.read_text(encoding="utf-8")
+        assert "comp-block" in html
 
     def test_report_contains_css_safe_ids(self, tmp_path: Path):
         from pyconveyor.benchmark import BenchmarkRunner
@@ -962,7 +969,7 @@ class TestReportHelpers:
         # IDs should use css-safe versions — no dots in id attributes
         assert 'id="case-0-case_greeting' in html
 
-    def test_report_contains_field_section(self, tmp_path: Path):
+    def test_report_contains_comparison_table(self, tmp_path: Path):
         from pyconveyor.benchmark import BenchmarkRunner
         from pyconveyor.report import generate_report
 
@@ -973,7 +980,7 @@ class TestReportHelpers:
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "step-section" in html
+        assert "comp-table" in html
 
 
 # ── CaseResult actuals/expecteds ────────────────────────────────────────────────

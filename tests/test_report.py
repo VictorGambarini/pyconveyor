@@ -1,8 +1,8 @@
 """Tests for report.py helper functions and HTML output.
 
-Covers: _reorder_to_expected, _fmt_value, _match_icon, _render_field_table,
-_yaml_block, _render_yaml_diff, and end-to-end generate_report with field
-comparison view.
+Covers: _flatten_leaves, _to_serialisable, _build_comp_data,
+_render_comparison_block, and end-to-end generate_report with the interactive
+field comparison table.
 """
 from __future__ import annotations
 
@@ -17,12 +17,10 @@ from pyconveyor.benchmark import (
     StepScore,
 )
 from pyconveyor.report import (
-    _fmt_value,
-    _match_icon,
-    _render_field_table,
-    _render_yaml_diff,
-    _reorder_to_expected,
-    _yaml_block,
+    _build_comp_data,
+    _flatten_leaves,
+    _render_comparison_block,
+    _to_serialisable,
     generate_report,
 )
 
@@ -71,295 +69,353 @@ def _make_summary(field_scores: list[FieldScore] | None = None) -> BenchmarkSumm
     )
 
 
-# ── _reorder_to_expected ──────────────────────────────────────────────────────
-
-class TestReorderToExpected:
-    def test_simple_reorder(self):
-        actual = {"b": 2, "a": 1, "c": 3}
-        expected = {"a": None, "b": None, "c": None}
-        result = _reorder_to_expected(actual, expected)
-        assert list(result.keys()) == ["a", "b", "c"]
-
-    def test_extra_actual_keys_at_end(self):
-        actual = {"b": 2, "a": 1, "extra": 99}
-        expected = {"a": None, "b": None}
-        result = _reorder_to_expected(actual, expected)
-        assert list(result.keys()) == ["a", "b", "extra"]
-
-    def test_missing_actual_key_skipped(self):
-        actual = {"a": 1}
-        expected = {"a": None, "b": None}
-        result = _reorder_to_expected(actual, expected)
-        assert list(result.keys()) == ["a"]
-
-    def test_nested_reorder(self):
-        actual = {"outer": {"z": 3, "y": 2, "x": 1}}
-        expected = {"outer": {"x": None, "y": None, "z": None}}
-        result = _reorder_to_expected(actual, expected)
-        assert list(result["outer"].keys()) == ["x", "y", "z"]
-
-    def test_non_dict_unchanged(self):
-        assert _reorder_to_expected("hello", "world") == "hello"
-        assert _reorder_to_expected([1, 2], [3, 4]) == [1, 2]
-        assert _reorder_to_expected(None, {"a": 1}) is None
-
-    def test_actual_not_dict_expected_dict(self):
-        assert _reorder_to_expected("not_a_dict", {"a": 1}) == "not_a_dict"
-
-    def test_preserves_values(self):
-        actual = {"b": 99, "a": 42}
-        expected = {"a": 0, "b": 0}
-        result = _reorder_to_expected(actual, expected)
-        assert result["a"] == 42
-        assert result["b"] == 99
+# ── _flatten_leaves ───────────────────────────────────────────────────────────
 
 
-# ── _fmt_value ────────────────────────────────────────────────────────────────
+class TestFlattenLeaves:
+    def test_flat_dict(self):
+        result = _flatten_leaves({"a": 1, "b": 2})
+        assert ("a", 1) in result
+        assert ("b", 2) in result
+        assert len(result) == 2
 
-class TestFmtValue:
-    def test_none_returns_dash(self):
-        result = _fmt_value(None)
-        assert "—" in result
-        assert 'class="muted"' in result
+    def test_nested_dict(self):
+        result = _flatten_leaves({"outer": {"inner": 42}})
+        assert ("outer.inner", 42) in result
+        assert len(result) == 1
 
-    def test_scalar_string(self):
-        result = _fmt_value("hello world")
-        assert "hello world" in result
-        assert "<code" in result
+    def test_list_indexed(self):
+        result = _flatten_leaves([10, 20])
+        assert ("[0]", 10) in result
+        assert ("[1]", 20) in result
 
-    def test_scalar_integer(self):
-        result = _fmt_value(42)
-        assert "42" in result
+    def test_list_of_dicts(self):
+        result = _flatten_leaves([{"a": 1}, {"a": 2}])
+        assert ("[0].a", 1) in result
+        assert ("[1].a", 2) in result
 
-    def test_dict_uses_yaml_inline(self):
-        result = _fmt_value({"key": "value"})
-        # YAML inline format uses {key: value}
-        assert "key" in result
-        assert "value" in result
-        assert "<code" in result
+    def test_scalar_with_prefix(self):
+        result = _flatten_leaves(42, "the.field")
+        assert result == [("the.field", 42)]
 
-    def test_list_uses_yaml_inline(self):
-        result = _fmt_value(["a", "b", "c"])
-        assert "a" in result
-        assert "<code" in result
+    def test_scalar_without_prefix_returns_empty(self):
+        result = _flatten_leaves(99)
+        assert result == []
 
-    def test_short_value_no_expand_button(self):
-        result = _fmt_value("short")
-        assert "val-expand" not in result
-        assert "val-short" not in result
+    def test_none_with_prefix(self):
+        result = _flatten_leaves(None, "x")
+        assert result == [("x", None)]
 
-    def test_long_value_gets_expand_toggle(self):
-        long_val = "x" * 200
-        result = _fmt_value(long_val)
-        assert "val-short" in result
-        assert "val-expand" in result
-        assert 'aria-label="Show full value"' in result
-        assert "val-full" in result
+    def test_empty_dict_with_prefix(self):
+        result = _flatten_leaves({}, "x")
+        assert result == [("x", None)]
 
-    def test_truncate_at_120_by_default(self):
-        val = "a" * 121
-        result = _fmt_value(val)
-        # The short text should be the first 120 chars + ellipsis
-        assert "a" * 120 + "…" in result
+    def test_empty_list_with_prefix(self):
+        result = _flatten_leaves([], "x")
+        assert result == [("x", None)]
 
-    def test_custom_truncate(self):
-        val = "b" * 50
-        result = _fmt_value(val, truncate=20)
-        assert "val-expand" in result
+    def test_empty_dict_no_prefix_returns_empty(self):
+        assert _flatten_leaves({}) == []
 
-    def test_html_escaping(self):
-        result = _fmt_value("<script>alert(1)</script>")
-        assert "<script>" not in result
-        assert "&lt;script&gt;" in result
+    def test_empty_list_no_prefix_returns_empty(self):
+        assert _flatten_leaves([]) == []
 
-    def test_ampersand_escaped(self):
-        result = _fmt_value("a & b")
-        assert "&amp;" in result
+    def test_deeply_nested(self):
+        val = {"a": {"b": {"c": "leaf"}}}
+        result = _flatten_leaves(val)
+        assert result == [("a.b.c", "leaf")]
 
+    def test_prefix_prepended(self):
+        result = _flatten_leaves({"x": 1}, prefix="root")
+        assert result == [("root.x", 1)]
 
-# ── _match_icon ───────────────────────────────────────────────────────────────
+    def test_boolean_and_float(self):
+        result = _flatten_leaves({"flag": True, "score": 0.95})
+        assert ("flag", True) in result
+        assert ("score", 0.95) in result
 
-class TestMatchIcon:
-    def test_pass_icon(self):
-        result = _match_icon(1.0, "scored")
-        assert 'aria-label="pass"' in result
-        assert "✓" in result
-        assert "icon-pass" in result
-
-    def test_fail_icon(self):
-        result = _match_icon(0.0, "scored")
-        assert 'aria-label="fail"' in result
-        assert "✗" in result
-        assert "icon-fail" in result
-
-    def test_partial_icon(self):
-        result = _match_icon(0.5, "scored")
-        assert 'aria-label="partial"' in result
-        assert "~" in result
-        assert "icon-warn" in result
-
-    def test_ignored_icon(self):
-        result = _match_icon(0.0, "ignored")
-        assert 'aria-label="ignored"' in result
-        assert "icon-ignored" in result
+    def test_string_value(self):
+        result = _flatten_leaves({"name": "Bacillus subtilis"})
+        assert ("name", "Bacillus subtilis") in result
 
 
-# ── _render_field_table ───────────────────────────────────────────────────────
+# ── _to_serialisable ──────────────────────────────────────────────────────────
 
-class TestRenderFieldTable:
-    def _make_ss(self, field_scores: list[FieldScore]) -> StepScore:
-        score = (
-            sum(f.score for f in field_scores if f.status == "scored")
-            / max(1, sum(1 for f in field_scores if f.status == "scored"))
+
+class TestToSerialisable:
+    def test_none(self):
+        assert _to_serialisable(None) is None
+
+    def test_bool(self):
+        assert _to_serialisable(True) is True
+
+    def test_int(self):
+        assert _to_serialisable(42) == 42
+
+    def test_float(self):
+        assert _to_serialisable(3.14) == 3.14
+
+    def test_str(self):
+        assert _to_serialisable("hello") == "hello"
+
+    def test_other_converts_to_str(self):
+        result = _to_serialisable(object())
+        assert isinstance(result, str)
+
+    def test_list_converts_to_str(self):
+        result = _to_serialisable([1, 2, 3])
+        assert isinstance(result, str)
+
+
+# ── _build_comp_data ──────────────────────────────────────────────────────────
+
+
+class TestBuildCompData:
+    def _make_case(
+        self,
+        actuals: dict | None = None,
+        expecteds: dict | None = None,
+    ) -> CaseResult:
+        if actuals is None:
+            actuals = {"greet": {"message": "hello"}}
+        if expecteds is None:
+            expecteds = {"greet": {"message": "hello"}}
+        return CaseResult(
+            case_name="c",
+            pipeline_path="p.yaml",
+            status="ok",
+            step_scores={},
+            overall_score=1.0,
+            error=None,
+            elapsed_seconds=0.0,
+            actuals=actuals,
+            expecteds=expecteds,
         )
-        return StepScore(step_name="greet", score=score, status="scored", field_scores=field_scores)
 
-    def test_empty_field_scores_returns_empty(self):
-        ss = StepScore(step_name="greet", score=1.0, status="scored", field_scores=[])
-        assert _render_field_table("greet", ss) == ""
+    def test_gold_key_present(self):
+        c = self._make_case()
+        data, options = _build_comp_data(c)
+        assert "gold__greet" in data
 
-    def test_single_field_score_returns_empty(self):
-        ss = self._make_ss([FieldScore("greet.msg", "hi", "hi", 1.0)])
-        assert _render_field_table("greet", ss) == ""
+    def test_step_key_present(self):
+        c = self._make_case()
+        data, options = _build_comp_data(c)
+        assert "step__greet" in data
 
-    def test_fail_rows_before_pass_rows(self):
-        fs = [
-            FieldScore("greet.a", "x", "y", 0.0),  # fail
-            FieldScore("greet.b", "ok", "ok", 1.0),  # pass
-            FieldScore("greet.c", "z", "w", 0.0),  # fail
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        fail_pos_a = result.index("greet.a")
-        fail_pos_c = result.index("greet.c")
-        # 'b' is in the pass details section, which comes after fail rows
-        # Find where greet.b appears relative to greet.a
-        assert fail_pos_a < result.index("greet.b")
-        assert fail_pos_c < result.index("greet.b")
+    def test_gold_flattened(self):
+        c = self._make_case(
+            actuals={"greet": {"a": 1}},
+            expecteds={"greet": {"x": {"y": 2}}},
+        )
+        data, _ = _build_comp_data(c)
+        assert data["gold__greet"] == {"x.y": 2}
 
-    def test_passing_rows_inside_details(self):
-        fs = [
-            FieldScore("greet.a", "x", "y", 0.0),
-            FieldScore("greet.b", "ok", "ok", 1.0),
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        # pass row should be inside a <details> element
-        details_pos = result.index("<details>")
-        pass_pos = result.index("greet.b")
-        assert details_pos < pass_pos
+    def test_step_flattened(self):
+        c = self._make_case(
+            actuals={"greet": {"items": ["alpha", "beta"]}},
+            expecteds={"greet": {}},
+        )
+        data, _ = _build_comp_data(c)
+        assert "items[0]" in data["step__greet"]
+        assert data["step__greet"]["items[0]"] == "alpha"
 
-    def test_ignored_rows_in_pass_group(self):
-        """$ignore fields are not failures — they go in the passing group."""
-        fs = [
-            FieldScore("greet.a", "x", "y", 0.0),  # fail
-            FieldScore("greet.b", "?", "$ignore", 0.0, status="ignored"),  # ignored
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        # greet.b is not a fail (ignored), so it goes in the pass/ignored group
-        pass_summary_pos = result.index("pass-summary")
-        b_pos = result.index("greet.b")
-        assert pass_summary_pos < b_pos
+    def test_options_order_gold_first(self):
+        c = self._make_case()
+        _, options = _build_comp_data(c)
+        keys = [o["key"] for o in options]
+        gold_idx = next(i for i, k in enumerate(keys) if k.startswith("gold__"))
+        step_idx = next(i for i, k in enumerate(keys) if k.startswith("step__"))
+        assert gold_idx < step_idx
 
-    def test_pass_summary_shows_count(self):
-        fs = [
-            FieldScore("greet.a", "x", "y", 0.0),  # fail
-            FieldScore("greet.b", "ok", "ok", 1.0),  # pass
-            FieldScore("greet.c", "ok", "ok", 1.0),  # pass
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        assert "2 passing fields" in result
+    def test_none_actual_skipped(self):
+        c = self._make_case(
+            actuals={"greet": None, "other": {"x": 1}},
+            expecteds={"greet": {}},
+        )
+        data, _ = _build_comp_data(c)
+        assert "step__greet" not in data
+        assert "step__other" in data
 
-    def test_pass_summary_singular(self):
-        fs = [
-            FieldScore("greet.a", "x", "y", 0.0),  # fail
-            FieldScore("greet.b", "ok", "ok", 1.0),  # 1 pass
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        assert "1 passing field" in result
-        assert "1 passing fields" not in result
+    def test_options_label_format(self):
+        c = self._make_case()
+        _, options = _build_comp_data(c)
+        labels = {o["key"]: o["label"] for o in options}
+        assert labels["gold__greet"] == "Gold: greet"
+        assert labels["step__greet"] == "Step: greet"
 
-    def test_all_fail_no_details_element(self):
-        fs = [
-            FieldScore("greet.a", "x", "y", 0.0),
-            FieldScore("greet.b", "m", "n", 0.0),
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        assert "<details>" not in result
+    def test_multiple_steps(self):
+        c = self._make_case(
+            actuals={"step1": {"a": 1}, "step2": {"b": 2}},
+            expecteds={"step1": {"a": 1}},
+        )
+        data, options = _build_comp_data(c)
+        assert "gold__step1" in data
+        assert "step__step1" in data
+        assert "step__step2" in data
 
-    def test_field_path_in_output(self):
-        fs = [
-            FieldScore("greet.message", "hi", "hello", 0.0),
-            FieldScore("greet.language", "en", "en", 1.0),
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        assert "greet.message" in result
-        assert "greet.language" in result
 
-    def test_expected_and_actual_columns(self):
-        fs = [
-            FieldScore("greet.msg", "hello", "world", 0.0),
-            FieldScore("greet.lang", "en", "en", 1.0),
-        ]
-        result = _render_field_table("greet", self._make_ss(fs))
-        # Both expected and actual values should appear
-        assert "hello" in result
-        assert "world" in result
+# ── _render_comparison_block ──────────────────────────────────────────────────
+
+
+class TestRenderComparisonBlock:
+    def _make_case(self, actuals=None, expecteds=None):
+        if actuals is None:
+            actuals = {"greet": {"message": "hello"}}
+        if expecteds is None:
+            expecteds = {"greet": {"message": "hello"}}
+        return CaseResult(
+            case_name="c",
+            pipeline_path="p.yaml",
+            status="ok",
+            step_scores={},
+            overall_score=1.0,
+            error=None,
+            elapsed_seconds=0.0,
+            actuals=actuals,
+            expecteds=expecteds,
+        )
+
+    def test_returns_string(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert isinstance(result, str)
+
+    def test_contains_json_script_tag(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert 'type="application/json"' in result
+        assert "comp-json-" in result
+
+    def test_contains_left_right_selects(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert "comp-left" in result
+        assert "comp-right" in result
+
+    def test_contains_filter_select(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert "comp-filter" in result
+        assert "All fields" in result
+        assert "Differences only" in result
+
+    def test_contains_comp_table(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert "comp-table" in result
+        assert "comp-tbody-" in result
+
+    def test_columns_in_header(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert "Field" in result
+        assert "Left" in result
+        assert "Right" in result
+        assert "Status" in result
+
+    def test_comp_init_called(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert "compInit(" in result
+
+    def test_gold_in_options(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert "Gold: greet" in result
+
+    def test_step_in_options(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "mycase")
+        assert "Step: greet" in result
+
+    def test_empty_data_returns_empty(self):
+        c = self._make_case(actuals={}, expecteds={})
+        result = _render_comparison_block(c, "mycase")
+        assert result == ""
+
+    def test_html_escaped_case_id(self):
+        """Case IDs with special chars are CSS-safe'd."""
+        c = self._make_case()
+        result = _render_comparison_block(c, "case/with.special:chars")
+        # No raw / or : should be injected into element IDs
+        assert 'id="comp-json-case-with-special-chars"' in result
+
+    def test_case_id_used_in_tbody(self):
+        c = self._make_case()
+        result = _render_comparison_block(c, "testid")
+        assert 'id="comp-tbody-testid"' in result
+
+    def test_json_data_contains_flattened_paths(self):
+        import json
+
+        c = self._make_case(
+            actuals={"greet": {"nested": {"value": 42}}},
+            expecteds={"greet": {"nested": {"value": 99}}},
+        )
+        result = _render_comparison_block(c, "x")
+        # extract JSON from <script type="application/json"> tag
+        start = result.index(">", result.index('type="application/json"')) + 1
+        end = result.index("</script>", start)
+        data = json.loads(result[start:end])
+        assert "step__greet" in data
+        assert "nested.value" in data["step__greet"]
+        assert data["step__greet"]["nested.value"] == 42
 
 
 # ── End-to-end report generation ──────────────────────────────────────────────
 
-class TestReportFieldComparison:
-    def _summary_with_fields(self) -> BenchmarkSummary:
-        fs = [
-            FieldScore("greet.message", "hi", "hello", 0.0),  # fail
-            FieldScore("greet.language", "en", "en", 1.0),    # pass
-            FieldScore("greet.punctuation", "!", "!", 1.0),   # pass
-        ]
-        return _make_summary(field_scores=fs)
 
-    def test_field_table_present_in_html(self, tmp_path: Path):
-        s = self._summary_with_fields()
+class TestReportEndToEnd:
+    def test_report_generates_html(self, tmp_path: Path):
+        s = _make_summary()
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        assert out.exists()
+        html = out.read_text(encoding="utf-8")
+        assert "<!doctype html>" in html.lower() or "<html" in html.lower()
+
+    def test_comparison_block_in_html(self, tmp_path: Path):
+        s = _make_summary()
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "field-table" in html
+        assert "comp-block" in html
 
     def test_field_paths_in_html(self, tmp_path: Path):
-        s = self._summary_with_fields()
+        s = _make_summary()
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "greet.message" in html
-        assert "greet.language" in html
+        # flat paths from actuals/expecteds should appear
+        assert "message" in html
+        assert "language" in html
 
-    def test_step_section_present(self, tmp_path: Path):
-        s = self._summary_with_fields()
+    def test_comp_init_js_called(self, tmp_path: Path):
+        s = _make_summary()
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "step-section" in html
+        assert "compInit(" in html
 
-    def test_yaml_diff_present(self, tmp_path: Path):
-        """Steps with multiple FieldScores use the YAML diff view."""
-        s = self._summary_with_fields()
+    def test_comp_table_sortable_headers(self, tmp_path: Path):
+        s = _make_summary()
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "yaml-diff" in html
+        assert "compSort(" in html
 
-    def test_no_diff_section_in_output(self, tmp_path: Path):
-        """Regression: YAML text diff should be gone from the report."""
-        runner = BenchmarkRunner(BENCHMARKS, pipelines=[PIPELINES / "hello.yaml"])
-        s = runner.run()
+    def test_no_yaml_diff_in_output(self, tmp_path: Path):
+        """Regression: old YAML diff markup should not be present."""
+        s = _make_summary()
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "diff-section" not in html
-        assert "Output Diff" not in html
-        assert "diff-side" not in html
-        assert "diff-unified" not in html
+        assert "yaml-diff" not in html
+        assert "diff-del" not in html
+        assert "diff-add" not in html
 
-    def test_no_diff_functions_in_html(self, tmp_path: Path):
-        """Regression: diff function CSS classes should not appear."""
+    def test_no_old_diff_side_classes(self, tmp_path: Path):
+        """Regression: removed diff CSS classes absent from output."""
         runner = BenchmarkRunner(BENCHMARKS, pipelines=[PIPELINES / "hello.yaml"])
         s = runner.run()
         out = tmp_path / "report.html"
@@ -367,175 +423,55 @@ class TestReportFieldComparison:
         html = out.read_text(encoding="utf-8")
         assert "wdiff-add" not in html
         assert "wdiff-del" not in html
+        assert "diff-section" not in html
 
-    def test_match_icons_present(self, tmp_path: Path):
-        s = self._summary_with_fields()
-        out = tmp_path / "report.html"
-        generate_report(s, output=out)
-        html = out.read_text(encoding="utf-8")
-        assert 'aria-label="pass"' in html
-        assert 'aria-label="fail"' in html
-
-    def test_field_score_summary_present(self, tmp_path: Path):
-        """The field-score summary <details> element is present below the YAML diff."""
-        s = self._summary_with_fields()
-        out = tmp_path / "report.html"
-        generate_report(s, output=out)
-        html = out.read_text(encoding="utf-8")
-        assert "field-score-summary" in html
-        assert "<details" in html
-
-    def test_single_field_score_no_field_table(self, tmp_path: Path):
-        """Steps with only one FieldScore use the compact step table, not the field table."""
-        fs = [FieldScore("greet.message", "hi", "hello", 0.0)]
-        s = _make_summary(field_scores=fs)
-        out = tmp_path / "report.html"
-        generate_report(s, output=out)
-        html = out.read_text(encoding="utf-8")
-        # The CSS defines .field-table but no HTML element with that class should be emitted
-        assert 'class="field-table"' not in html
-
-    def test_fmt_value_in_simple_step_table(self, tmp_path: Path):
-        """For steps with 0-1 FieldScores, values are fmt_value formatted (YAML inline for dicts)."""
-        fs = []  # no field scores -> simple table
-        s = _make_summary(field_scores=fs)
-        # actual/expected are dicts, should appear in YAML inline format not repr()
-        out = tmp_path / "report.html"
-        generate_report(s, output=out)
-        html = out.read_text(encoding="utf-8")
-        # Should NOT have Python repr-style {'key': 'value'}
-        assert "{'message':" not in html
-        # Should have YAML inline or plain monospace code
-        assert "<code" in html
-
-    def test_unchecked_steps_shown(self, tmp_path: Path):
-        """Steps present in actuals but not in step_scores are shown as 'also benchmarkable'."""
+    def test_score_details_collapsible(self, tmp_path: Path):
+        """Benchmark score summary is inside a <details> element."""
         fs = [
-            FieldScore("greet.message", "hello", "hello", 1.0),
+            FieldScore("greet.message", "hi", "hello", 0.0),
             FieldScore("greet.language", "en", "en", 1.0),
         ]
-        ss = StepScore(step_name="greet", score=1.0, status="scored", field_scores=fs)
+        s = _make_summary(field_scores=fs)
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        html = out.read_text(encoding="utf-8")
+        assert "score-details" in html
+        assert "<details" in html
+
+    def test_json_embedded_in_case_card(self, tmp_path: Path):
+        """Per-case JSON blob is embedded in <script type=application/json>."""
+        s = _make_summary()
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        html = out.read_text(encoding="utf-8")
+        assert 'type="application/json"' in html
+
+    def test_error_block_shown(self, tmp_path: Path):
+        """Cases with an error show the error-block."""
+        ss = StepScore(step_name="greet", score=0.0, status="missing", field_scores=[])
         case = CaseResult(
-            case_name="test_case",
+            case_name="err_case",
             pipeline_path="test.yaml",
-            status="ok",
+            status="error",
             step_scores={"greet": ss},
-            overall_score=1.0,
-            error=None,
-            elapsed_seconds=0.1,
-            actuals={
-                "greet": {"message": "hello", "language": "en"},
-                "preprocess": {"text": "raw"},  # not in step_scores
-                "postprocess": {"out": "done"},  # not in step_scores
-            },
-            expecteds={"greet": {"message": "hello", "language": "en"}},
+            overall_score=0.0,
+            error="Something went wrong",
+            elapsed_seconds=0.0,
+            actuals={},
+            expecteds={},
         )
         pr = PipelineBenchmarkResult(
             pipeline_path="test.yaml",
             cases=[case],
-            step_mean_accuracy={"greet": 1.0},
-            step_pass_rate={"greet": 1.0},
-            overall_mean_accuracy=1.0,
-            overall_pass_rate=1.0,
+            step_mean_accuracy={},
+            step_pass_rate={},
+            overall_mean_accuracy=0.0,
+            overall_pass_rate=0.0,
         )
-        s = BenchmarkSummary(pipelines=[pr], case_names=["test_case"], pass_threshold=0.8)
+        s = BenchmarkSummary(pipelines=[pr], case_names=["err_case"], pass_threshold=0.8)
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "unchecked-steps" in html
-        assert "preprocess" in html
-        assert "postprocess" in html
-        assert "expected.yaml" in html
-
-
-# ── _yaml_block ───────────────────────────────────────────────────────────────
-
-
-class TestYamlBlock:
-    def test_none_returns_null(self):
-        result = _yaml_block(None)
-        assert result.strip() == "null"
-
-    def test_scalar_string(self):
-        result = _yaml_block("hello")
-        assert "hello" in result
-
-    def test_dict_block_style(self):
-        result = _yaml_block({"a": 1, "b": 2})
-        # Block style means newlines, not {a: 1, b: 2} on one line
-        assert "\n" in result
-        assert "a:" in result
-        assert "b:" in result
-
-    def test_list_block_style(self):
-        result = _yaml_block([{"x": 1}, {"x": 2}])
-        assert "- x:" in result
-
-    def test_no_flow_style(self):
-        val = {"key": [1, 2, 3]}
-        result = _yaml_block(val)
-        # Block style: items on separate lines, no {key: [1, 2, 3]}
-        assert "{" not in result
-
-
-# ── _render_yaml_diff ─────────────────────────────────────────────────────────
-
-
-class TestRenderYamlDiff:
-    def test_identical_values_no_diff_lines(self):
-        val = {"a": 1, "b": 2}
-        result = _render_yaml_diff(val, val)
-        assert "yaml-diff-match" in result
-        assert "diff-del" not in result
-        assert "diff-add" not in result
-
-    def test_different_values_show_diff_lines(self):
-        expected = {"message": "hello"}
-        actual = {"message": "world"}
-        result = _render_yaml_diff(expected, actual)
-        assert "diff-del" in result
-        assert "diff-add" in result
-        assert "yaml-diff-match" not in result
-
-    def test_del_line_contains_expected_value(self):
-        result = _render_yaml_diff({"x": "foo"}, {"x": "bar"})
-        # The '-' line should show the expected value 'foo'
-        assert "foo" in result
-
-    def test_add_line_contains_actual_value(self):
-        result = _render_yaml_diff({"x": "foo"}, {"x": "bar"})
-        # The '+' line should show the actual value 'bar'
-        assert "bar" in result
-
-    def test_html_escaped(self):
-        result = _render_yaml_diff({"k": "<script>"}, {"k": "<safe>"})
-        assert "<script>" not in result
-        assert "&lt;script&gt;" in result
-
-    def test_field_table_with_step_args_shows_yaml_diff(self):
-        """_render_field_table shows YAML diff when step_expected/actual provided."""
-        fs = [
-            FieldScore("greet.msg", "hi", "hello", 0.0),
-            FieldScore("greet.lang", "en", "en", 1.0),
-        ]
-        ss = StepScore(step_name="greet", score=0.5, status="scored", field_scores=fs)
-        result = _render_field_table(
-            "greet",
-            ss,
-            step_expected={"msg": "hello", "lang": "en"},
-            step_actual={"msg": "hi", "lang": "en"},
-        )
-        assert "yaml-diff" in result
-        assert "field-score-summary" in result
-
-    def test_field_table_without_step_args_uses_fallback(self):
-        """_render_field_table without step_expected/actual falls back to plain field table."""
-        fs = [
-            FieldScore("greet.msg", "hi", "hello", 0.0),
-            FieldScore("greet.lang", "en", "en", 1.0),
-        ]
-        ss = StepScore(step_name="greet", score=0.5, status="scored", field_scores=fs)
-        result = _render_field_table("greet", ss)
-        assert "yaml-diff" not in result
-        assert "Expected" in result  # fallback table has Expected column
+        assert "error-block" in html
+        assert "Something went wrong" in html
 
