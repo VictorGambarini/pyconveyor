@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyconveyor"
-version = "1.10.0"
+version = "1.10.1"
 description = "Deterministic YAML pipeline engine for structured LLM extraction"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -81,6 +81,10 @@ python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "anthropic"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

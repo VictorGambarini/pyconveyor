@@ -4,15 +4,11 @@ via ESM import which does not support SRI)."""
 
 from __future__ import annotations
 
-import difflib
-import html
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from .benchmark import BenchmarkSummary
 from .graph import generate_mermaid
@@ -29,9 +25,6 @@ ALL_SECTIONS = [
 ]
 
 DEFAULT_SECTIONS = [s for s in ALL_SECTIONS if s != "attempt_logs"]
-
-# Number of context lines shown around each diff hunk.
-_DIFF_CONTEXT_LINES = 3
 
 
 def generate_report(
@@ -358,92 +351,40 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
     status_label = "pass" if is_pass else "fail"
     expanded = "expanded" if auto_expand else ""
 
-    # Collect step names.
-    all_steps: list[str] = []
-    seen_steps: set[str] = set()
-    for s in c.step_scores:
-        if s not in seen_steps:
-            all_steps.append(s)
-            seen_steps.add(s)
-
-    # Build step detail rows (always visible, no nested collapse).
-    step_rows: list[str] = []
-    for step_name in all_steps:
-        ss = c.step_scores.get(step_name)
-        if ss is None:
-            continue
-
+    # ── Step score summary (missing / ignored steps) ──
+    score_rows: list[str] = []
+    for step_name, ss in c.step_scores.items():
         if ss.status == "missing":
-            step_rows.append(
+            score_rows.append(
                 f'<tr><td><code>{_esc(step_name)}</code></td>'
-                f'<td colspan="3"><span class="badge badge-warn">missing</span></td></tr>'
+                f'<td colspan="2"><span class="badge badge-warn">missing</span></td></tr>'
             )
         elif ss.status == "ignored":
-            step_rows.append(
+            score_rows.append(
                 f'<tr><td><code>{_esc(step_name)}</code></td>'
-                f'<td colspan="3"><span class="badge badge-muted">ignored</span></td></tr>'
+                f'<td colspan="2"><span class="badge badge-muted">ignored</span></td></tr>'
             )
         else:
-            score_cell = _score_badge(ss.score)
-            if ss.field_scores and len(ss.field_scores) > 1:
-                field_rows = "".join(
-                    '<tr class="field-row field-{}"><td></td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
-                        "ignored" if f.status == "ignored" else ("pass" if f.score >= 1.0 else ("fail" if f.score <= 0.0 else "warn")),
-                        _esc(f.field),
-                        _repr(f.actual),
-                        _repr(f.expected),
-                        '<span class="badge badge-muted">ignored</span>' if f.status == "ignored" else _score_badge(f.score),
-                    )
-                    for f in ss.field_scores
-                )
-                field_detail = (
-                    f'<tr class="field-detail"><td colspan="5">'
-                    f'<table class="table table-sm table-nested">'
-                    f'<thead><tr><th></th><th>Field</th><th>Actual</th><th>Expected</th><th>Score</th></tr></thead>'
-                    f'<tbody>{field_rows}</tbody></table></td></tr>'
-                )
-            else:
-                field_detail = ""
-
-            step_rows.append(
+            score_rows.append(
                 f'<tr><td><code>{_esc(step_name)}</code></td>'
-                f'<td>{score_cell}</td>'
-                f'<td class="muted"><code>{_repr(c.actuals.get(step_name))}</code></td>'
-                f'<td class="muted"><code>{_repr(c.expecteds.get(step_name))}</code></td>'
+                f'<td>{_score_badge(ss.score)}</td>'
+                f'<td class="muted small">({ss.status})</td>'
                 f'</tr>'
-                f'{field_detail}'
             )
 
-    step_table = ""
-    if step_rows:
-        step_table = (
-            f'<table class="table table-sm">'
-            f'<thead><tr><th>Step</th><th>Score</th><th>Actual</th><th>Expected</th></tr></thead>'
-            f'<tbody>{"".join(step_rows)}</tbody></table>'
+    score_table = ""
+    if score_rows:
+        score_table = (
+            f'<details class="score-details">'
+            f'<summary class="score-summary">Benchmark scores ({len(score_rows)} step{"s" if len(score_rows) != 1 else ""})</summary>'
+            f'<table class="table table-sm" style="margin-top:6px">'
+            f'<thead><tr><th>Step</th><th>Score</th><th></th></tr></thead>'
+            f'<tbody>{"".join(score_rows)}</tbody></table>'
+            f'</details>'
         )
 
-    # Diff section for this case.
-    diff_parts: list[str] = []
-    if c.status == "ok":
-        for step_name in all_steps:
-            ss = c.step_scores.get(step_name)
-            if ss is None or ss.status in ("missing", "ignored"):
-                continue
-            exp_val = c.expecteds.get(step_name)
-            act_val = c.actuals.get(step_name)
-            if exp_val is not None:
-                diff_parts.append(
-                    _render_step_diff(c.case_name, step_name, exp_val, act_val)
-                )
-
-    diff_section = ""
-    if diff_parts:
-        diff_section = (
-            f'<div class="diff-section">'
-            f'<h5 class="diff-heading">Output Diff</h5>'
-            f'{"".join(diff_parts)}'
-            f"</div>"
-        )
+    # ── Interactive comparison block ──
+    comp_block = _render_comparison_block(c, case_id)
 
     error_section = ""
     if c.error:
@@ -468,8 +409,8 @@ def _case_card(c: Any, pipeline_index: int, threshold: float, auto_expand: bool 
         f"</button>"
         f'<div id="{case_id}-body" class="case-body">'
         f'{error_section}'
-        f'{step_table}'
-        f'{diff_section}'
+        f'{comp_block}'
+        f'{score_table}'
         f"</div></div>"
     )
 
@@ -661,175 +602,141 @@ def _repr(val: Any) -> str:
     return _esc(repr(val))
 
 
+def _flatten_leaves(val: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    """Recursively flatten a nested dict/list to ``(dotted-path, leaf-value)`` pairs.
+
+    Dicts are traversed by key name; lists are indexed as ``[0]``, ``[1]``, …
+    Scalars become leaf entries.  Empty containers at *prefix* are emitted as
+    ``(prefix, None)`` so the path is always visible in the comparison table.
+    """
+    if isinstance(val, dict):
+        if not val:
+            return [(prefix, None)] if prefix else []
+        result: list[tuple[str, Any]] = []
+        for k, v in val.items():
+            child = f"{prefix}.{k}" if prefix else str(k)
+            result.extend(_flatten_leaves(v, child))
+        return result
+    if isinstance(val, list):
+        if not val:
+            return [(prefix, None)] if prefix else []
+        result = []
+        for i, v in enumerate(val):
+            child = f"{prefix}[{i}]"
+            result.extend(_flatten_leaves(v, child))
+        return result
+    return [(prefix, val)] if prefix else []
+
+
+def _to_serialisable(val: Any) -> Any:
+    """Convert a leaf value to a JSON-serialisable scalar."""
+    if val is None or isinstance(val, (bool, int, float, str)):
+        return val
+    return str(val)
+
+
+def _build_comp_data(
+    c: Any,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
+    """Pre-flatten all step outputs and gold expectations into comparison datasets.
+
+    Returns:
+        data:    ``{dataset_key: {flat_path: leaf_value, ...}, ...}``
+        options: ordered list of ``{key, label}`` dicts for the UI dropdowns.
+    """
+    data: dict[str, dict[str, Any]] = {}
+    options: list[dict[str, str]] = []
+
+    # Gold (expected from expected.yaml) — one entry per scored step
+    for step_name in sorted(c.expecteds.keys()):
+        expected_val = c.expecteds[step_name]
+        key = f"gold__{step_name}"
+        flat = _flatten_leaves(expected_val)
+        data[key] = {path: _to_serialisable(v) for path, v in flat}
+        options.append({"key": key, "label": f"Gold: {step_name}"})
+
+    # All step actual outputs (includes unscored pipeline steps)
+    for step_name in sorted(c.actuals.keys()):
+        actual_val = c.actuals[step_name]
+        if actual_val is None:
+            continue
+        key = f"step__{step_name}"
+        flat = _flatten_leaves(actual_val)
+        data[key] = {path: _to_serialisable(v) for path, v in flat}
+        options.append({"key": key, "label": f"Step: {step_name}"})
+
+    return data, options
+
+
+def _render_comparison_block(c: Any, case_id: str) -> str:
+    """Render the interactive field-comparison table for *c*.
+
+    Embeds all step data as inline JSON; the table is built and updated by
+    client-side JS (``compInit`` / ``compUpdate`` / ``compSort`` / ``compFilter``).
+    """
+    data, options = _build_comp_data(c)
+    if not data or len(options) < 1:
+        return ""
+
+    # Sensible defaults: Gold on the left (if available), last scored step on right
+    gold_keys = [o["key"] for o in options if o["key"].startswith("gold__")]
+    step_keys = [o["key"] for o in options if o["key"].startswith("step__")]
+
+    left_default = gold_keys[0] if gold_keys else options[0]["key"]
+    # For the right, prefer a step__ key that matches the gold step name
+    right_default = options[-1]["key"]
+    if gold_keys and step_keys:
+        gold_step = gold_keys[0].removeprefix("gold__")
+        matching = [k for k in step_keys if k == f"step__{gold_step}"]
+        right_default = matching[0] if matching else step_keys[-1]
+
+    def _opts_html(selected: str) -> str:
+        return "".join(
+            f'<option value="{_esc(o["key"])}"'
+            f'{" selected" if o["key"] == selected else ""}>'
+            f"{_esc(o['label'])}</option>"
+            for o in options
+        )
+
+    cid = _css_safe(case_id)
+    json_data = json.dumps(data, ensure_ascii=False)
+
+    return (
+        f'<div class="comp-block">'
+        f'<script type="application/json" id="comp-json-{cid}">{json_data}</script>'
+        f'<div class="comp-controls">'
+        f'<label class="comp-sel-label">Left'
+        f'<select class="comp-sel comp-left" data-case="{cid}" '
+        f'onchange="compUpdate(\'{cid}\')">{_opts_html(left_default)}</select></label>'
+        f'<span class="comp-vs">vs</span>'
+        f'<label class="comp-sel-label">Right'
+        f'<select class="comp-sel comp-right" data-case="{cid}" '
+        f'onchange="compUpdate(\'{cid}\')">{_opts_html(right_default)}</select></label>'
+        f'<label class="comp-sel-label comp-filter-label">Show'
+        f'<select class="comp-filter" data-case="{cid}" '
+        f'onchange="compFilter(\'{cid}\')">'
+        f'<option value="all">All fields</option>'
+        f'<option value="diff">Differences only</option>'
+        f'<option value="fail">Failures only</option>'
+        f'</select></label>'
+        f'</div>'
+        f'<table class="comp-table" id="comp-table-{cid}">'
+        f'<thead><tr>'
+        f'<th class="comp-th sortable" onclick="compSort(\'{cid}\',0)">Field</th>'
+        f'<th class="comp-th sortable" onclick="compSort(\'{cid}\',1)">Left</th>'
+        f'<th class="comp-th sortable" onclick="compSort(\'{cid}\',2)">Right</th>'
+        f'<th class="comp-th sortable" onclick="compSort(\'{cid}\',3)">Status</th>'
+        f'</tr></thead>'
+        f'<tbody id="comp-tbody-{cid}"></tbody>'
+        f'</table>'
+        f'<script>compInit("{cid}","{_esc(left_default)}","{_esc(right_default)}");</script>'
+        f'</div>'
+    )
+
+
 def _css_safe(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "-", str(name))
 
-
-def _field_row_class(score: float, status: str) -> str:
-    if status == "ignored":
-        return "table-secondary"
-    if score >= 1.0:
-        return "table-success"
-    if score <= 0.0:
-        return "table-danger"
-    return "table-warning"
-
-
-# ── Diff rendering ─────────────────────────────────────────────────────────────
-
-
-def _render_step_diff(
-    case_name: str, step_name: str, expected: Any, actual: Any
-) -> str:
-    """Render a clean side-by-side HTML diff of expected vs actual YAML."""
-    exp_str = yaml.dump(
-        expected, sort_keys=False, allow_unicode=True, default_flow_style=False,
-        Dumper=yaml.SafeDumper,
-    )
-    act_str = yaml.dump(
-        actual, sort_keys=False, allow_unicode=True, default_flow_style=False,
-        Dumper=yaml.SafeDumper,
-    )
-
-    exp_lines = exp_str.splitlines(keepends=True)
-    act_lines = act_str.splitlines(keepends=True)
-
-    safe_id = _css_safe(f"diff-{case_name}-{step_name}")
-
-    # Build unified diff first (used on mobile).
-    unified_html = _build_unified_diff(exp_lines, act_lines, step_name)
-
-    # Build side-by-side diff (used on desktop).
-    side_html = _build_side_by_side_diff(exp_lines, act_lines, step_name)
-
-    return (
-        f'<div class="diff-collapse mt-2" id="{safe_id}">'
-        f'<div class="diff-step-label">Step: <code>{_esc(step_name)}</code></div>'
-        f'<div class="diff-side">'
-        f'<div class="diff-header-row">'
-        f'<div class="diff-header">Expected</div>'
-        f'<div class="diff-header">Actual</div>'
-        f"</div>"
-        f'{side_html}'
-        f"</div>"
-        f'<div class="diff-unified">{unified_html}</div>'
-        f"</div>"
-    )
-
-
-def _build_side_by_side_diff(
-    exp_lines: list[str], act_lines: list[str], step_name: str
-) -> str:
-    """Build a side-by-side diff table (desktop)."""
-    differ = difflib.SequenceMatcher(None, exp_lines, act_lines)
-    rows: list[str] = []
-
-    for tag, i1, i2, j1, j2 in differ.get_opcodes():
-        if tag == "equal":
-            for k in range(i1, i2):
-                el = html.escape(exp_lines[k].rstrip("\n"))
-                al = html.escape(act_lines[k - i1 + j1].rstrip("\n"))
-                rows.append(
-                    f'<tr><td class="diff-ln">{k + 1}</td>'
-                    f'<td class="diff-cell diff-eq"><pre>{el}</pre></td>'
-                    f'<td class="diff-ln">{j1 + (k - i1) + 1}</td>'
-                    f'<td class="diff-cell diff-eq"><pre>{al}</pre></td></tr>'
-                )
-        elif tag == "replace":
-            # Pair up lines for side-by-side comparison.
-            max_len = max(i2 - i1, j2 - j1)
-            for k in range(max_len):
-                e_idx = i1 + k
-                a_idx = j1 + k
-                e_text = html.escape(exp_lines[e_idx].rstrip("\n")) if e_idx < i2 else ""
-                a_text = html.escape(act_lines[a_idx].rstrip("\n")) if a_idx < j2 else ""
-                e_ln = str(e_idx + 1) if e_idx < i2 else ""
-                a_ln = str(a_idx + 1) if a_idx < j2 else ""
-
-                # Word-level diff within the line.
-                if e_text and a_text:
-                    e_text, a_text = _word_diff_side_by_side(e_text, a_text)
-
-                e_cls = "diff-cell diff-del" if e_text else "diff-cell diff-empty"
-                a_cls = "diff-cell diff-add" if a_text else "diff-cell diff-empty"
-
-                rows.append(
-                    f'<tr><td class="diff-ln">{e_ln}</td>'
-                    f'<td class="{e_cls}"><pre>{e_text}</pre></td>'
-                    f'<td class="diff-ln">{a_ln}</td>'
-                    f'<td class="{a_cls}"><pre>{a_text}</pre></td></tr>'
-                )
-        elif tag == "delete":
-            for k in range(i1, i2):
-                el = html.escape(exp_lines[k].rstrip("\n"))
-                rows.append(
-                    f'<tr><td class="diff-ln">{k + 1}</td>'
-                    f'<td class="diff-cell diff-del"><pre>{el}</pre></td>'
-                    f'<td class="diff-ln"></td>'
-                    f'<td class="diff-cell diff-empty"></td></tr>'
-                )
-        elif tag == "insert":
-            for k in range(j1, j2):
-                al = html.escape(act_lines[k].rstrip("\n"))
-                rows.append(
-                    f'<tr><td class="diff-ln"></td>'
-                    f'<td class="diff-cell diff-empty"></td>'
-                    f'<td class="diff-ln">{k + 1}</td>'
-                    f'<td class="diff-cell diff-add"><pre>{al}</pre></td></tr>'
-                )
-
-    return f'<table class="diff-table"><tbody>{"".join(rows)}</tbody></table>'
-
-
-def _build_unified_diff(
-    exp_lines: list[str], act_lines: list[str], step_name: str
-) -> str:
-    """Build a unified diff (mobile)."""
-    a_lines = [line.rstrip("\n") for line in exp_lines]
-    b_lines = [line.rstrip("\n") for line in act_lines]
-    udiff = difflib.unified_diff(a_lines, b_lines, fromfile="Expected", tofile="Actual")
-    result: list[str] = []
-    for line in udiff:
-        escaped = html.escape(line)
-        if line.startswith("---") or line.startswith("+++"):
-            result.append(f'<span class="diff-hdr">{escaped}</span>')
-        elif line.startswith("@@"):
-            result.append(f'<span class="diff-hunk">{escaped}</span>')
-        elif line.startswith("-"):
-            result.append(f'<span class="diff-del">{escaped}</span>')
-        elif line.startswith("+"):
-            result.append(f'<span class="diff-add">{escaped}</span>')
-        else:
-            result.append(escaped)
-    return '<pre class="diff-unified-pre">' + "\n".join(result) + "</pre>"
-
-
-def _word_diff_side_by_side(e_text: str, a_text: str) -> tuple[str, str]:
-    """Return (expected_html, actual_html) with word-level highlights."""
-    # Use char-level SequenceMatcher to find changed spans within the line.
-    sm = difflib.SequenceMatcher(None, e_text, a_text)
-    e_parts: list[str] = []
-    a_parts: list[str] = []
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag == "equal":
-            e_parts.append(e_text[i1:i2])
-            a_parts.append(a_text[j1:j2])
-        elif tag == "replace":
-            e_parts.append(
-                f'<span class="wdiff-del">{e_text[i1:i2]}</span>'
-            )
-            a_parts.append(
-                f'<span class="wdiff-add">{a_text[j1:j2]}</span>'
-            )
-        elif tag == "delete":
-            e_parts.append(
-                f'<span class="wdiff-del">{e_text[i1:i2]}</span>'
-            )
-        elif tag == "insert":
-            a_parts.append(
-                f'<span class="wdiff-add">{a_text[j1:j2]}</span>'
-            )
-    return "".join(e_parts), "".join(a_parts)
 
 
 # ── PDF export ─────────────────────────────────────────────────────────────────
@@ -1180,115 +1087,144 @@ _HTML_SHELL = """\
     .delta-pos {{ color: var(--pass); font-weight: 600; font-family: var(--font-mono); font-size: 13px; }}
     .delta-neg {{ color: var(--fail); font-weight: 600; font-family: var(--font-mono); font-size: 13px; }}
 
-    /* ── Diff ── */
-    .diff-collapse {{
-      margin-top: 0.75rem;
-    }}
-
-    .diff-step-label {{
+    /* ── Benchmark score details ── */
+    .score-details {{ margin-top: 0.5rem; margin-bottom: 0.25rem; }}
+    .score-summary {{
+      cursor: pointer;
       font-size: 12px;
       color: var(--text-muted);
-      margin-bottom: 0.5rem;
+      padding: 0.2rem 0.4rem;
+      list-style: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
     }}
+    .score-summary::-webkit-details-marker {{ display: none; }}
+    .score-summary::before {{ content: "▶"; font-size: 9px; }}
+    details[open] .score-summary::before {{ content: "▼"; }}
 
-    .diff-side {{
-      display: block;
-      overflow-x: auto;
-    }}
+    /* ── Comparison block ── */
+    .comp-block {{ margin: 0.75rem 0; }}
 
-    .diff-unified {{
-      display: none;
-    }}
-
-    .diff-header-row {{
+    .comp-controls {{
       display: flex;
-      background: #f9fafb;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.5rem;
+      padding: 0.4rem 0.6rem;
+      background: var(--surface);
       border: 1px solid var(--border);
-      border-bottom: none;
-      border-radius: var(--radius) var(--radius) 0 0;
+      border-radius: 6px;
+    }}
+    .comp-sel-label {{
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }}
+    .comp-filter-label {{ margin-left: auto; }}
+    .comp-sel, .comp-filter {{
+      font-size: 12px;
+      padding: 0.2rem 0.4rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--fg);
+      cursor: pointer;
+    }}
+    .comp-vs {{
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }}
 
-    .diff-header {{
-      flex: 1;
-      padding: 0.3rem 0.75rem;
+    /* ── Comparison table ── */
+    .comp-table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      table-layout: fixed;
+    }}
+    .comp-table col.col-field  {{ width: 28%; }}
+    .comp-table col.col-left   {{ width: 28%; }}
+    .comp-table col.col-right  {{ width: 28%; }}
+    .comp-table col.col-status {{ width: 16%; }}
+
+    .comp-th {{
+      padding: 0.35rem 0.6rem;
+      text-align: left;
       font-size: 11px;
-      font-weight: 600;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--text-secondary);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      border-top: 1px solid var(--border);
+      white-space: nowrap;
     }}
+    .comp-th.sortable {{ cursor: pointer; user-select: none; }}
+    .comp-th.sortable:hover {{ background: var(--border-light); }}
+    .comp-th .sort-icon {{ font-size: 9px; margin-left: 3px; opacity: 0.5; }}
+    .comp-th.sort-asc .sort-icon::after  {{ content: "▲"; opacity: 1; }}
+    .comp-th.sort-desc .sort-icon::after {{ content: "▼"; opacity: 1; }}
 
-    .diff-header:first-child {{
-      border-right: 1px solid var(--border);
-    }}
-
-    .diff-table {{
-      width: 100%;
-      border-collapse: collapse;
-      border: 1px solid var(--border);
-      border-radius: 0 0 var(--radius) var(--radius);
-      font-size: 12px;
-      font-family: var(--font-mono);
-    }}
-
-    .diff-ln {{
-      width: 2.5em;
-      padding: 0 0.4rem;
-      text-align: right;
-      color: var(--text-muted);
-      background: #f9fafb;
-      border-right: 1px solid var(--border-light);
-      font-size: 11px;
-      user-select: none;
-    }}
-
-    .diff-cell {{
-      padding: 0 0.5rem;
+    .comp-td {{
+      padding: 0.3rem 0.6rem;
+      border-bottom: 1px solid var(--border-light);
       vertical-align: top;
-    }}
-
-    .diff-cell pre {{
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-all;
+      word-break: break-word;
       font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.5;
+    }}
+    .comp-td.col-field  {{ font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }}
+    .comp-td.col-status {{ font-family: var(--font-sans); font-size: 12px; font-weight: 600; }}
+
+    /* Row status tints */
+    .comp-row-match  {{ background: rgba(34,197,94,0.06); }}
+    .comp-row-close  {{ background: rgba(251,191,36,0.08); }}
+    .comp-row-fail   {{ background: rgba(239,68,68,0.08); }}
+    .comp-row-left   {{ background: rgba(249,115,22,0.07); }}
+    .comp-row-right   {{ background: rgba(59,130,246,0.07); }}
+    .comp-row-ignored {{ background: var(--surface); color: var(--text-muted); }}
+
+    /* Group separator / header rows */
+    .comp-group-sep {{ height: 4px; background: transparent; }}
+    .comp-group-header {{ background: var(--bg); border-top: 2px solid var(--border); }}
+    .comp-group-label {{
+      padding: 4px 8px 3px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }}
 
-    .diff-eq {{ background: none; }}
-    .diff-add {{ background: #dcfce7; }}
-    .diff-del {{ background: #fee2e2; }}
-    .diff-empty {{ background: #f9fafb; }}
+    /* Status icon colours */
+    .comp-icon-match   {{ color: var(--pass); }}
+    .comp-icon-close   {{ color: var(--warn); }}
+    .comp-icon-fail    {{ color: var(--fail); }}
+    .comp-icon-left    {{ color: #f97316; }}
+    .comp-icon-right   {{ color: #3b82f6; }}
+    .comp-icon-ignored {{ color: var(--text-muted); }}
 
-    .diff-unified-pre {{
-      margin: 0;
-      padding: 0.75rem;
-      background: #f9fafb;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
+    /* Long value expand */
+    .comp-val-short  {{ display: inline; }}
+    .comp-val-full   {{ display: none; }}
+    .comp-val-short.expanded .comp-val-text {{ display: none; }}
+    .comp-val-short.expanded .comp-val-full {{ display: inline; }}
+    .comp-val-btn {{
+      background: none; border: none;
+      color: var(--accent); cursor: pointer;
+      font-size: 10px; padding: 0 2px;
       font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.5;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
     }}
+    .comp-val-btn:hover {{ text-decoration: underline; }}
 
-    .diff-hdr {{ color: var(--accent); font-weight: 600; }}
-    .diff-hunk {{ color: var(--accent); }}
-
-    /* Word-level diff highlights */
-    .wdiff-add {{ background: #86efac; border-radius: 2px; padding: 0 1px; }}
-    .wdiff-del {{ background: #fca5a5; border-radius: 2px; padding: 0 1px; }}
-
-    /* ── Field rows ── */
-    .field-detail td {{ padding: 0; }}
-
-    .field-row.field-pass {{ background: var(--pass-bg); }}
-    .field-row.field-warn {{ background: var(--warn-bg); }}
-    .field-row.field-fail {{ background: var(--fail-bg); }}
-    .field-row.field-ignored {{ background: var(--border-light); }}
 
     /* ── Mermaid ── */
     .mermaid {{
@@ -1297,6 +1233,10 @@ _HTML_SHELL = """\
       border-radius: var(--radius);
       padding: 1rem;
       overflow-x: auto;
+      visibility: hidden;
+    }}
+    .mermaid[data-rendered] {{
+      visibility: visible;
     }}
 
     .graph-label {{
@@ -1352,14 +1292,6 @@ _HTML_SHELL = """\
       padding-top: 0;
     }}
 
-    /* ── Diff heading ── */
-    .diff-heading {{
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      margin: 0.75rem 0 0.5rem;
-    }}
-
     /* ── Utilities ── */
     .muted {{ color: var(--text-muted); }}
     .small {{ font-size: 12px; }}
@@ -1406,19 +1338,6 @@ _HTML_SHELL = """\
         align-items: flex-start;
       }}
 
-      .diff-side {{
-        display: none;
-      }}
-
-      .diff-unified {{
-        display: block;
-      }}
-    }}
-
-    @media (min-width: 769px) {{
-      .diff-unified {{
-        display: none;
-      }}
     }}
 
     /* ── Print ── */
@@ -1459,13 +1378,6 @@ _HTML_SHELL = """\
         padding: 0;
       }}
 
-      .diff-unified {{
-        display: block;
-      }}
-
-      .diff-side {{
-        display: none;
-      }}
     }}
   </style>
 </head>
@@ -1488,13 +1400,231 @@ _HTML_SHELL = """\
     btn.setAttribute('aria-expanded', !expanded);
     card.classList.toggle('expanded');
   }}
+
+  /* ── Field-comparison table ── */
+  var _compState = {{}};
+
+  function escHtml(s) {{
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }}
+
+  function compFmt(v) {{
+    if (v === null || v === undefined) return '<span style="color:var(--text-muted)">—</span>';
+    var s = String(v);
+    if (s.length <= 80) return '<code>' + escHtml(s) + '</code>';
+    var short = escHtml(s.slice(0,80));
+    var full  = escHtml(s);
+    return '<span class="comp-val-short">'
+      + '<code class="comp-val-text">' + short + '…</code>'
+      + '<button class="comp-val-btn" onclick="this.closest(\\'.comp-val-short\\').classList.toggle(\\'expanded\\')">[+]</button>'
+      + '<code class="comp-val-full" hidden>' + full + '</code>'
+      + '</span>';
+  }}
+
+  function compGroup(path) {{
+    // Extract top-level group from path: e.g. entries[0].name → entries[0]
+    var m = path.match(/^([^.]+(?:\\[\\d+\\])?)/);
+    return m ? m[1] : path;
+  }}
+
+  function compCompare(a, b) {{
+    // $ignore sentinel: field is explicitly excluded from scoring
+    if (a === '$ignore' || b === '$ignore') return 'ignored';
+    if (a === undefined) return 'right';
+    if (b === undefined) return 'left';
+    if (a === b) return 'match';
+    // numeric within 5%
+    var na = parseFloat(a), nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb) && na !== 0) {{
+      if (Math.abs(na - nb) / Math.abs(na) <= 0.05) return 'close';
+    }}
+    return 'fail';
+  }}
+
+  function compStatusIcon(status) {{
+    var map = {{
+      match:   ['comp-icon-match',   '✓ match'],
+      close:   ['comp-icon-close',   '~ close'],
+      fail:    ['comp-icon-fail',    '✗ fail'],
+      left:    ['comp-icon-left',    '← left only'],
+      right:   ['comp-icon-right',   '→ right only'],
+      ignored: ['comp-icon-ignored', '— ignored'],
+    }};
+    var pair = map[status] || ['', status];
+    return '<span class="' + pair[0] + '">' + escHtml(pair[1]) + '</span>';
+  }}
+
+  function compRowClass(status) {{
+    return {{ match:'comp-row-match', close:'comp-row-close', fail:'comp-row-fail',
+              left:'comp-row-left', right:'comp-row-right',
+              ignored:'comp-row-ignored' }}[status] || '';
+  }}
+
+  function compRender(cid, leftKey, rightKey) {{
+    var jsonEl = document.getElementById('comp-json-' + cid);
+    if (!jsonEl) return;
+    var data = JSON.parse(jsonEl.textContent);
+    var left  = data[leftKey]  || {{}};
+    var right = data[rightKey] || {{}};
+
+    // Union of all paths
+    var pathSet = {{}};
+    Object.keys(left).forEach(function(k)  {{ pathSet[k] = 1; }});
+    Object.keys(right).forEach(function(k) {{ pathSet[k] = 1; }});
+    var paths = Object.keys(pathSet).sort();
+
+    var st = _compState[cid] || {{}};
+    var filter = st.filter || 'all';
+    var sortCol = st.sortCol !== undefined ? st.sortCol : -1;
+    var sortDir = st.sortDir || 'asc';
+
+    // Build rows data
+    var rows = paths.map(function(p) {{
+      var lv = left.hasOwnProperty(p)  ? left[p]  : undefined;
+      var rv = right.hasOwnProperty(p) ? right[p] : undefined;
+      var status = compCompare(lv, rv);
+      return {{ path: p, left: lv, right: rv, status: status }};
+    }});
+
+    // Filter
+    if (filter === 'diff') {{
+      rows = rows.filter(function(r) {{ return r.status !== 'match' && r.status !== 'ignored'; }});
+    }} else if (filter === 'fail') {{
+      rows = rows.filter(function(r) {{ return r.status === 'fail' || r.status === 'left' || r.status === 'right'; }});
+    }}
+
+    // Sort
+    if (sortCol >= 0) {{
+      var getKey = [
+        function(r) {{ return r.path; }},
+        function(r) {{ return r.left === undefined ? '' : String(r.left); }},
+        function(r) {{ return r.right === undefined ? '' : String(r.right); }},
+        function(r) {{ return r.status; }},
+      ][sortCol];
+      rows.sort(function(a, b) {{
+        var ak = getKey(a), bk = getKey(b);
+        if (ak < bk) return sortDir === 'asc' ? -1 : 1;
+        if (ak > bk) return sortDir === 'asc' ?  1 : -1;
+        return 0;
+      }});
+    }}
+
+    // Build HTML rows, inserting group-separator headers between list-index groups
+    // Only when sorting by field (col 0) or default (no sort), so groups are contiguous
+    var addGroupHeaders = (sortCol === -1 || sortCol === 0);
+    var lastGroup = null;
+    var htmlParts = [];
+    rows.forEach(function(r) {{
+      if (addGroupHeaders) {{
+        var grp = compGroup(r.path);
+        if (grp !== lastGroup) {{
+          if (lastGroup !== null) {{
+            htmlParts.push('<tr class="comp-group-sep"><td colspan="4"></td></tr>');
+          }}
+          htmlParts.push(
+            '<tr class="comp-group-header">'
+            + '<td colspan="4" class="comp-group-label"><code>' + escHtml(grp) + '</code></td>'
+            + '</tr>'
+          );
+          lastGroup = grp;
+        }}
+      }}
+      htmlParts.push(
+        '<tr class="' + compRowClass(r.status) + '">'
+        + '<td class="comp-td col-field"><code>' + escHtml(r.path) + '</code></td>'
+        + '<td class="comp-td col-left">'  + compFmt(r.left)  + '</td>'
+        + '<td class="comp-td col-right">' + compFmt(r.right) + '</td>'
+        + '<td class="comp-td col-status">' + compStatusIcon(r.status) + '</td>'
+        + '</tr>'
+      );
+    }});
+    var html = htmlParts.join('');
+
+    var tbody = document.getElementById('comp-tbody-' + cid);
+    if (tbody) tbody.innerHTML = html || '<tr><td colspan="4" style="padding:0.5rem;color:var(--text-muted)">No fields to display.</td></tr>';
+
+    // Update sort icons
+    var table = document.getElementById('comp-table-' + cid);
+    if (table) {{
+      var ths = table.querySelectorAll('.comp-th');
+      ths.forEach(function(th, i) {{
+        th.classList.remove('sort-asc', 'sort-desc');
+        var icon = th.querySelector('.sort-icon');
+        if (!icon) {{ icon = document.createElement('span'); icon.className = 'sort-icon'; th.appendChild(icon); }}
+        icon.textContent = '';
+        if (i === sortCol) {{
+          th.classList.add('sort-' + sortDir);
+        }}
+      }});
+    }}
+  }}
+
+  function compInit(cid, leftKey, rightKey) {{
+    _compState[cid] = {{ filter: 'all', sortCol: -1, sortDir: 'asc' }};
+    compRender(cid, leftKey, rightKey);
+  }}
+
+  function compUpdate(cid) {{
+    var block = document.querySelector('#comp-table-' + cid)
+                  ? document.getElementById('comp-table-' + cid).closest('.comp-block')
+                  : null;
+    if (!block) return;
+    var leftSel  = block.querySelector('.comp-left');
+    var rightSel = block.querySelector('.comp-right');
+    if (!leftSel || !rightSel) return;
+    compRender(cid, leftSel.value, rightSel.value);
+  }}
+
+  function compSort(cid, colIdx) {{
+    var st = _compState[cid] || {{}};
+    if (st.sortCol === colIdx) {{
+      if (st.sortDir === 'asc')  st.sortDir = 'desc';
+      else if (st.sortDir === 'desc') {{ st.sortCol = -1; st.sortDir = 'asc'; }}
+    }} else {{
+      st.sortCol = colIdx; st.sortDir = 'asc';
+    }}
+    _compState[cid] = st;
+    compUpdate(cid);
+  }}
+
+  function compFilter(cid) {{
+    var block = document.querySelector('#comp-table-' + cid)
+                  ? document.getElementById('comp-table-' + cid).closest('.comp-block')
+                  : null;
+    if (!block) return;
+    var filterSel = block.querySelector('.comp-filter');
+    if (!filterSel) return;
+    _compState[cid] = _compState[cid] || {{}};
+    _compState[cid].filter = filterSel.value;
+    compUpdate(cid);
+  }}
 </script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
   integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt"
   crossorigin="anonymous"></script>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
+  mermaid.initialize({{ startOnLoad: false, theme: 'default' }});
+  async function _renderMermaid() {{
+    const els = Array.from(document.querySelectorAll('.mermaid:not([data-rendered])'));
+    for (const el of els) {{
+      const id = 'mg-' + Math.random().toString(36).slice(2, 9);
+      try {{
+        const {{ svg }} = await mermaid.render(id, el.textContent.trim());
+        el.innerHTML = svg;
+      }} catch (e) {{
+        console.warn('Mermaid render error:', e);
+      }}
+      el.setAttribute('data-rendered', '1');
+    }}
+  }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', _renderMermaid);
+  }} else {{
+    _renderMermaid();
+  }}
 </script>
 <script>
 {chart_js}

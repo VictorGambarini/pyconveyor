@@ -928,28 +928,32 @@ class TestReportHelpers:
 
         assert _css_safe("abc123_-") == "abc123_-"
 
-    def test_field_row_class_scored(self):
-        from pyconveyor.report import _field_row_class
+    def test_flatten_leaves_basic(self):
+        from pyconveyor.report import _flatten_leaves
 
-        assert _field_row_class(1.0, "scored") == "table-success"
-        assert _field_row_class(0.0, "scored") == "table-danger"
-        assert _field_row_class(0.5, "scored") == "table-warning"
-        assert _field_row_class(0.0, "ignored") == "table-secondary"
+        result = _flatten_leaves({"a": 1, "b": {"c": 2}})
+        assert ("a", 1) in result
+        assert ("b.c", 2) in result
 
-    def test_render_step_diff_contains_expected_elements(self):
-        from pyconveyor.report import _render_step_diff
+    def test_to_serialisable_primitives(self):
+        from pyconveyor.report import _to_serialisable
 
-        html = _render_step_diff(
-            "case1", "greet",
-            {"message": "Bonjour!", "language": "French"},
-            {"message": "Hello!", "language": "French"},
-        )
-        assert 'id="diff-case1-greet"' in html
-        assert "Bonjour" in html
-        assert "Hello" in html
-        assert "diff-table" in html
-        assert "Expected" in html
-        assert "Actual" in html
+        assert _to_serialisable(None) is None
+        assert _to_serialisable(42) == 42
+        assert _to_serialisable("hello") == "hello"
+
+    def test_report_contains_comp_block(self, tmp_path: Path):
+        from pyconveyor.benchmark import BenchmarkRunner
+        from pyconveyor.report import generate_report
+
+        pipelines = Path(__file__).parent / "fixtures" / "pipelines"
+        benchmarks = Path(__file__).parent / "fixtures" / "benchmarks"
+        runner = BenchmarkRunner(benchmarks, pipelines=[pipelines / "hello.yaml"])
+        s = runner.run()
+        out = tmp_path / "report.html"
+        generate_report(s, output=out)
+        html = out.read_text(encoding="utf-8")
+        assert "comp-block" in html
 
     def test_report_contains_css_safe_ids(self, tmp_path: Path):
         from pyconveyor.benchmark import BenchmarkRunner
@@ -965,7 +969,7 @@ class TestReportHelpers:
         # IDs should use css-safe versions — no dots in id attributes
         assert 'id="case-0-case_greeting' in html
 
-    def test_report_contains_diff_section(self, tmp_path: Path):
+    def test_report_contains_comparison_table(self, tmp_path: Path):
         from pyconveyor.benchmark import BenchmarkRunner
         from pyconveyor.report import generate_report
 
@@ -976,7 +980,7 @@ class TestReportHelpers:
         out = tmp_path / "report.html"
         generate_report(s, output=out)
         html = out.read_text(encoding="utf-8")
-        assert "diff-collapse" in html
+        assert "comp-table" in html
 
 
 # ── CaseResult actuals/expecteds ────────────────────────────────────────────────
