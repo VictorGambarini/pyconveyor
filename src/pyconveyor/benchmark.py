@@ -297,14 +297,14 @@ class BenchmarkRunner:
             actuals[sname] = val
 
         for step_name, expected_value in expected.items():
-            sr = rctx.steps.get(step_name)
-            if sr is None:
+            maybe_sr = rctx.steps.get(step_name)
+            if maybe_sr is None:
                 step_scores[step_name] = StepScore(
                     step_name=step_name, score=0.0, status="missing"
                 )
                 continue
             score, status, fscores = self._score_step(
-                step_name, sr.value, expected_value
+                step_name, maybe_sr.value, expected_value
             )
             step_scores[step_name] = StepScore(
                 step_name=step_name,

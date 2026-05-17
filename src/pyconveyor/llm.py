@@ -83,7 +83,7 @@ def make_client(
 
     if provider == "anthropic":
         try:
-            from anthropic import Anthropic  # type: ignore[import-not-found]
+            from anthropic import Anthropic
         except ImportError as exc:
             raise ImportError(
                 "The 'anthropic' package is not installed. "
