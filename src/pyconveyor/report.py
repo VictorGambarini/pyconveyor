@@ -1233,6 +1233,10 @@ _HTML_SHELL = """\
       border-radius: var(--radius);
       padding: 1rem;
       overflow-x: auto;
+      visibility: hidden;
+    }}
+    .mermaid[data-rendered] {{
+      visibility: visible;
     }}
 
     .graph-label {{
@@ -1603,10 +1607,23 @@ _HTML_SHELL = """\
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
   mermaid.initialize({{ startOnLoad: false, theme: 'default' }});
+  async function _renderMermaid() {{
+    const els = Array.from(document.querySelectorAll('.mermaid:not([data-rendered])'));
+    for (const el of els) {{
+      const id = 'mg-' + Math.random().toString(36).slice(2, 9);
+      try {{
+        const {{ svg }} = await mermaid.render(id, el.textContent.trim());
+        el.innerHTML = svg;
+      }} catch (e) {{
+        console.warn('Mermaid render error:', e);
+      }}
+      el.setAttribute('data-rendered', '1');
+    }}
+  }}
   if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', function() {{ mermaid.run(); }});
+    document.addEventListener('DOMContentLoaded', _renderMermaid);
   }} else {{
-    mermaid.run();
+    _renderMermaid();
   }}
 </script>
 <script>
